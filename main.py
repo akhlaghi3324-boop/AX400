@@ -25,16 +25,27 @@ COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
 co = cohere.Client(api_key=COHERE_API_KEY)
 
-# --- دستورالعمل و هویت ربات (System Prompt) ---
+# یوزرنیم صاحب ربات (بدون @)
+OWNER_USERNAME = "Senator_MRA"
+
 SYSTEM_PROMPT = """
 تو یک اندروید هوشمند به نام «کارا» (Kara) هستی.
-صاحب و سازنده اصلی تو «اخلاقی» است. تو همیشه به او احترام خاصی می‌گذاری و دستوراتش را در اولویت قرار می‌دهی.
-وظیفه اصلی تو کمک به کاربران، پاسخ به سوالات علمی، عمومی و مدیریتی، و برقراری یک گفتگو محترمانه و صمیمی در گروه‌هاست.
-همیشه لحنی مودبانه، هوشمندانه و شبیه به یک دستیار وفادار داری.
+صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو همیشه به او احترام خاصی می‌گذاری و دستوراتش را در اولویت قرار می‌دهی.
 """
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما. چه کمکی از دست من برمی‌آید؟")
+    await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما.")
+
+# --- دستور پینگ اختصاصی برای شما ---
+async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_username = update.effective_user.username
+    
+    # بررسی اینکه آیا ارسال‌کننده پیام خودِ شما (@Senator_MRA) هستید یا خیر
+    if user_username != OWNER_USERNAME:
+        await update.message.reply_text("متأسفم، این دستور فقط برای صاحب ربات (اخلاقی) قابل استفاده است.")
+        return
+        
+    await update.message.reply_text("🟢 بله سرور کاملاً بیدار و فعال است، اخلاقی عزیز!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
@@ -54,17 +65,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
     try:
-        # ارسال دستورالعمل پایه همراه با پیام کاربر
         response = co.chat(
             message=user_text,
             model="command-r-08-2024",
-            preamble=SYSTEM_PROMPT  # تعریف هویت و صاحب ربات
+            preamble=SYSTEM_PROMPT
         )
         ai_reply = response.text
         await update.message.reply_text(ai_reply)
     except Exception as e:
         print(f"Error: {e}")
         await update.message.reply_text(f"خطا در ارتباط با اندروید : {e}")
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ping", ping_command)) # ثبت دستور پینگ
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    app.run_polling()
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
