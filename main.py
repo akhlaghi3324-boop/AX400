@@ -35,13 +35,25 @@ SYSTEM_PROMPT = """
 تو حافظه گفتگو داری و پیام‌های قبلی کاربر را به یاد می‌آوری تا مکالمه‌ای روان و طبیعی داشته باشی.
 """
 
-# ذخیره‌سازی تاریخچه چت‌ها و پیام‌های اخیر گروه
+# ذخیره‌سازی داده‌ها
 chat_histories = {}
-group_recent_messages = {}  # ذخیره پیام‌های گروه برای خلاصه‌سازی
+group_recent_messages = {}
 MAX_HISTORY_LENGTH = 10
-MAX_GROUP_MESSAGES = 30     # تعداد پیام‌هایی که برای خلاصه‌سازی در گروه ذخیره می‌شوند
+MAX_GROUP_MESSAGES = 30
+
+# مجموعه‌های جدید برای ذخیره آمار (محیط‌های کاری)
+active_groups = set()  # شناسه گروه‌ها
+active_users = set()   # شناسه کاربران در پیوی
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_type = update.effective_chat.type
+    chat_id = update.effective_chat.id
+    
+    if chat_type in ["group", "supergroup"]:
+        active_groups.add(chat_id)
+    else:
+        active_users.add(chat_id)
+        
     await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما. من صحبت‌های قبلی‌مان را به یاد می‌آورم!")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,6 +72,21 @@ async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("🟢 بله سرور کاملاً بیدار و فعال است !")
 
+# دستور جدید: مشاهده آمار گروه‌ها و کاربران (مخصوص شما)
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_username = update.effective_user.username
+    if user_username != OWNER_USERNAME:
+        await update.message.reply_text("متأسفم، این دستور فقط برای صاحب ربات قابل استفاده است.")
+        return
+
+    stats_msg = (
+        "📊 **گزارش آمار اندروید کارا:**\n\n"
+        f"👥 **تعداد گروه‌ها:** {len(active_groups)} گروه\n"
+        f"👤 **تعداد کاربران خصوصی (PV):** {len(active_users)} کاربر\n"
+        f"🌐 **مجموع کل چت‌های فعال:** {len(active_groups) + len(active_users)}"
+    )
+    await update.message.reply_text(stats_msg, parse_mode="Markdown")
+
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in chat_histories:
@@ -68,7 +95,6 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("حافظه‌ای برای پاک کردن وجود ندارد.")
 
-# دستور جدید: خلاصه‌سازی پیام‌های اخیر گروه
 async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
@@ -103,11 +129,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     bot_username = context.bot.username
 
-    # نادیده گرفتن پیام‌های غیرمتنی یا پیام‌های خالی (مثل استیکر)
+    # نادیده گرفتن پیام‌های غیرمتنی
     if not user_text:
         return
 
-    # ذخیره پیام‌های تمام کاربران گروه برای دستور خلاصه‌سازی
+    # ثبت آمار گروه‌ها و کاربران موقع ارسال پیام
+    if chat_type in ["group", "supergroup"]:
+        active_groups.add(chat_id)
+    else:
+        active_users.add(chat_id)
+
+    # ذخیره پیام‌های گروه برای خلاصه‌سازی
     if chat_type in ["group", "supergroup"]:
         user_name = update.effective_user.first_name or "کاربر"
         if chat_id not in group_recent_messages:
@@ -117,7 +149,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(group_recent_messages[chat_id]) > MAX_GROUP_MESSAGES:
             group_recent_messages[chat_id].pop(0)
 
-        # بررسی شرط پاسخگویی ربات در گروه (فقط ریپلای یا منشن)
         is_replied_to_bot = (
             update.message.reply_to_message 
             and update.message.reply_to_message.from_user.id == context.bot.id
@@ -129,7 +160,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
-    # مقداردهی اولیه حافظه برای این چت
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
 
@@ -142,7 +172,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         ai_reply = response.text
 
-        # به روزرسانی تاریخچه مکالمات
         chat_histories[chat_id].append({"role": "USER", "message": user_text})
         chat_histories[chat_id].append({"role": "CHATBOT", "message": ai_reply})
 
@@ -160,8 +189,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ping", ping_command))
+    app.add_handler(CommandHandler("stats", stats_command)) # ثبت دستور آمارگیری
     app.add_handler(CommandHandler("clear", clear_history))
-    app.add_handler(CommandHandler("summary", summarize_group)) # ثبت دستور خلاصه‌سازی
+    app.add_handler(CommandHandler("summary", summarize_group))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app.run_polling()
