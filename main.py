@@ -5,7 +5,7 @@ import cohere
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- ساخت سرور ساختگی برای رضایت Render ---
+# ساخت سرور برای Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -17,14 +17,13 @@ def run_dummy_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# اجرای سرور وب در پس‌زمینه
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# --- کد اصلی ربات تلگرام ---
+# کدهای ربات
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
-co = cohere.ClientV2(api_key=COHERE_API_KEY)
+co = cohere.Client(api_key=COHERE_API_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("سلام! من کارا هستم. چه کمکی می‌تونم بکنم؟")
@@ -34,7 +33,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     bot_username = context.bot.username
 
-    # تنظیمات گروه
     if chat_type in ["group", "supergroup"]:
         is_replied_to_bot = (
             update.message.reply_to_message 
@@ -49,13 +47,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = co.chat(
-            model="command-r-plus",
-            messages=[{"role": "user", "content": user_text}]
+            message=user_text,
+            model="command-r"
         )
-        ai_reply = response.message.content[0].text
+        ai_reply = response.text
         await update.message.reply_text(ai_reply)
     except Exception as e:
-        await update.message.reply_text("متأسفانه مشکلی در دریافت پاسخ پیش آمد.")
+        print(f"Error: {e}")
+        await update.message.reply_text(f"خطا در ارتباط با اندروید : {e}")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
