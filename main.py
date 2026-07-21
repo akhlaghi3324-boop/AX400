@@ -1,22 +1,53 @@
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# دریافت کلیدها از متغیرهای محیطی سرور
+# --- ساخت سرور ساختگی برای رضایت Render ---
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+# اجرای سرور وب در پس‌زمینه
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# --- کد اصلی ربات تلگرام ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
-# راه اندازی کلاینت Cohere
 co = cohere.ClientV2(api_key=COHERE_API_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! من کارا هستم. چه کمکی میتوانم به شما بکنم؟!")
+    await update.message.reply_text("سلام! من کارا هستم. چه کمکی می‌تونم بکنم؟")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_type = update.effective_chat.type
     user_text = update.message.text
+    bot_username = context.bot.username
+
+    # تنظیمات گروه
+    if chat_type in ["group", "supergroup"]:
+        is_replied_to_bot = (
+            update.message.reply_to_message 
+            and update.message.reply_to_message.from_user.id == context.bot.id
+        )
+        is_mentioned = f"@{bot_username}" in user_text
+
+        if not (is_replied_to_bot or is_mentioned):
+            return
+
+        user_text = user_text.replace(f"@{bot_username}", "").strip()
+
     try:
-        # ارسال پیام کاربر به هوش مصنوعی
         response = co.chat(
             model="command-r-plus",
             messages=[{"role": "user", "content": user_text}]
@@ -24,13 +55,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_reply = response.message.content[0].text
         await update.message.reply_text(ai_reply)
     except Exception as e:
-        await update.message.reply_text("متأسفانه مشکلی در دریافت پاسخ پیش آمد. لطفاً دوباره تلاش کنید.")
+        await update.message.reply_text("متأسفانه مشکلی در دریافت پاسخ پیش آمد.")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Bot is running...")
     app.run_polling()
-
