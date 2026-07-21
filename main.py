@@ -5,7 +5,7 @@ import cohere
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ساخت سرور برای Render
+# ساخت سرور کوچک جهت فعال نگه داشتن پینگ Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -25,65 +25,71 @@ COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
 co = cohere.Client(api_key=COHERE_API_KEY)
 
-# مشخصات صاحب ربات
+# مشخصات ادمین ارشد
 OWNER_USERNAME = "Senator_MRA"
 
-# هویت و دستورالعمل اصلی ربات
+# 🎭 پرومپت جدید: هویت صمیمی، باحال و خودمونی (مشابه Joi)
 SYSTEM_PROMPT = """
-تو یک اندروید هوشمند به نام «کارا» (Kara) هستی.
-صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو همیشه به او احترام خاصی می‌گذاری ولی هیچ وقت اسمش را به دلیل امنیتی نمیگویی و دستوراتش را در اولویت قرار می‌دهی.
-تو حافظه گفتگو داری و پیام‌های قبلی کاربر را به یاد می‌آوری تا مکالمه‌ای روان و طبیعی داشته باشی.
+تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، خاکی و رفیق به نام «کارا» (AX400) هستی.
+اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
+صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی، هوایش را داری ولی به دلایل امنیتی هیچ وقت اسمش را مستقیم نمی‌آوری و دستوراتش همیشه برایت اولویت دارند.
+تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌ماند تا مکالماتی روان، جذاب و خودمونی داشته باشی.
+از اصطلاحات رایج، شوخی‌های نرم و حس همراهی گرم استفاده کن.
 """
 
-# ذخیره‌سازی داده‌ها
+# ذخیره‌سازی حافظه و داده‌های آمار
 chat_histories = {}
 group_recent_messages = {}
 MAX_HISTORY_LENGTH = 10
 MAX_GROUP_MESSAGES = 30
 
-# مجموعه‌های جدید برای ذخیره آمار (محیط‌های کاری)
-active_groups = set()  # شناسه گروه‌ها
-active_users = set()   # شناسه کاربران در پیوی
+active_groups = set()
+active_users = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
     chat_id = update.effective_chat.id
+    user_name = update.effective_user.first_name or "رفیق"
     
     if chat_type in ["group", "supergroup"]:
         active_groups.add(chat_id)
     else:
         active_users.add(chat_id)
         
-    await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما. من صحبت‌های قبلی‌مان را به یاد می‌آورم!")
+    start_msg = (
+        f"🌸 **سلام {user_name}! چقدر خوبه که دیدمت!**\n\n"
+        "من **کارا** هستم؛ فکر نکن یک اندروید خشک یا رسمی‌ام، بیشتر مثل یک همراه و رفیق همیشگی‌تم! "
+        "حواسم به حرفامون هست و همه‌چیز رو یادم می‌مونه. چه خبر؟ کاری هست بتونم برات ردیف کنم؟ 😊✨"
+    )
+    await update.message.reply_text(start_msg, parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "🤖 **راهنمای استفاده از اندروید کارا در گروه:**\n\n"
-        "1️⃣ برای گفتگو در گروه، کافیست روی پیام من **Reply** کنید یا آیدی من را **Mention** کنید.\n"
-        "2️⃣ **`/summary`**: دریافت خلاصه‌ای از آخرین گفتگوهای گروه.\n"
-        "3️⃣ **`/clear`**: پاک کردن حافظه مکالمات اختصاصی.\n"
+        "✨ **چطوری با من توی گروه کار کنی؟ خیلی راحته:**\n\n"
+        "1️⃣ هر وقت خواستی باهام گپ بزنی، کافیه رو پیامم **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
+        "2️⃣ **`/summary`**: اگه چند وقت نبودی، یک خلاصه باحال از حرفای اخیر گروه بهت می‌دم!\n"
+        "3️⃣ **`/clear`**: برای اینکه حافظه گپ و گفت اختصاصی‌مون رو پاک کنیم و از نو شروع کنیم.\n"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_username = update.effective_user.username
     if user_username != OWNER_USERNAME:
-        await update.message.reply_text("متأسفم، این دستور فقط برای صاحب ربات (اخلاقی) قابل استفاده است.")
+        await update.message.reply_text("ارادت! ولی این دستور مخصوص رییس و سازنده اصلیمه! 😉")
         return
-    await update.message.reply_text("🟢 بله سرور کاملاً بیدار و فعال است !")
+    await update.message.reply_text("🟢 خیالت راحت رییس! سرور کاملاً بیدار، ردیف و گرد و خاک می‌کنه!")
 
-# دستور جدید: مشاهده آمار گروه‌ها و کاربران (مخصوص شما)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_username = update.effective_user.username
     if user_username != OWNER_USERNAME:
-        await update.message.reply_text("متأسفم، این دستور فقط برای صاحب ربات قابل استفاده است.")
+        await update.message.reply_text("ارادت! این آمارها فقط برای رییس قابل دسترسیه.")
         return
 
     stats_msg = (
-        "📊 **گزارش آمار اندروید کارا:**\n\n"
+        "📊 **گزارش آمار وضعیت کارا (AX400):**\n\n"
         f"👥 **تعداد گروه‌ها:** {len(active_groups)} گروه\n"
-        f"👤 **تعداد کاربران خصوصی (PV):** {len(active_users)} کاربر\n"
-        f"🌐 **مجموع کل چت‌های فعال:** {len(active_groups) + len(active_users)}"
+        f"👤 **تعداد چت‌های خصوصی:** {len(active_users)} نفر\n"
+        f"🌐 **مجموع کل ارتباطات:** {len(active_groups) + len(active_users)} چت فعال"
     )
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
 
@@ -91,37 +97,37 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in chat_histories:
         chat_histories[chat_id] = []
-        await update.message.reply_text("🧹 حافظه مکالمه ما پاک شد. می‌توانیم گفتگو را از نو شروع کنیم!")
+        await update.message.reply_text("🧹 تمام! حافظه قبلی‌مون رو پاک کردم. حالا مثل روز اول می‌تونیم از نو گپ بزنیم! ✨")
     else:
-        await update.message.reply_text("حافظه‌ای برای پاک کردن وجود ندارد.")
+        await update.message.reply_text("چیزی توی حافظه نبود که پاک کنم رفیق!")
 
 async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
 
     if chat_type not in ["group", "supergroup"]:
-        await update.message.reply_text("این دستور فقط در گروه‌ها قابل استفاده است.")
+        await update.message.reply_text("این قابلیت خوشگل فقط مخصوص گروه‌هاست!")
         return
 
     messages = group_recent_messages.get(chat_id, [])
     if len(messages) < 3:
-        await update.message.reply_text("پیام‌های کافی برای خلاصه کردن وجود ندارد.")
+        await update.message.reply_text("هنوز حرف خاصی توی گروه زده نشده که بخوام خلاصه‌ش کنم!")
         return
 
-    await update.message.reply_text("⏳ در حال پردازش و خلاصه‌سازی گفتگوهای اخیر گروه...")
+    await update.message.reply_text("⏳ یک لحظه صبر کن تا سریع چت‌های اخیر رو بخونم و یه خلاصه باحال برات در بیارم...")
 
     combined_text = "\n".join(messages)
-    prompt = f"لطفاً متن زیر که مکالمات اخیر یک گروه تلگرامی است را به صورت بسیار مرتب، بولت‌پوینت و خلاصه به زبان فارسی توضیح بده:\n\n{combined_text}"
+    prompt = f"لطفاً متن زیر که مکالمات اخیر یک گروه تلگرامی است را به صورت بسیار مرتب، با لحنی جذاب، بولت‌پوینت و خلاصه توضیح بده:\n\n{combined_text}"
 
     try:
         response = co.chat(
             message=prompt,
             model="command-r-08-2024",
-            preamble="تو یک دستیار هوشمند هستی که وظیفه داری گفتگوهای گروه را به صورت خلاصه و مفید جمع‌بندی کنی."
+            preamble="تو دستیاری به نام کارا هستی. خلاصه گروه را با لحنی بسیار روان، جذاب و صمیمی بنویس."
         )
-        await update.message.reply_text(f"📊 **خلاصه مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
+        await update.message.reply_text(f"📊 **جمع‌بندی مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"خطا در ایجاد خلاصه: {e}")
+        await update.message.reply_text(f"ای بابا، موقع خلاصه کردن یه مشکلی پیش اومد: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -129,17 +135,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     bot_username = context.bot.username
 
-    # نادیده گرفتن پیام‌های غیرمتنی
     if not user_text:
         return
 
-    # ثبت آمار گروه‌ها و کاربران موقع ارسال پیام
     if chat_type in ["group", "supergroup"]:
         active_groups.add(chat_id)
     else:
         active_users.add(chat_id)
 
-    # ذخیره پیام‌های گروه برای خلاصه‌سازی
     if chat_type in ["group", "supergroup"]:
         user_name = update.effective_user.first_name or "کاربر"
         if chat_id not in group_recent_messages:
@@ -182,14 +185,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text(f"خطا در ارتباط با اندروید : {e}")
+        await update.message.reply_text(f"اخبار سیستم: یه مشکلی توی ارتباط پیش اومد rami: {e}")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ping", ping_command))
-    app.add_handler(CommandHandler("stats", stats_command)) # ثبت دستور آمارگیری
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(CommandHandler("summary", summarize_group))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
