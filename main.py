@@ -25,8 +25,16 @@ COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
 co = cohere.Client(api_key=COHERE_API_KEY)
 
+# --- دستورالعمل و هویت ربات (System Prompt) ---
+SYSTEM_PROMPT = """
+تو یک اندروید هوشمند به نام «کارا» (Kara) هستی.
+صاحب و سازنده اصلی تو «اخلاقی» است. تو همیشه به او احترام خاصی می‌گذاری و دستوراتش را در اولویت قرار می‌دهی.
+وظیفه اصلی تو کمک به کاربران، پاسخ به سوالات علمی، عمومی و مدیریتی، و برقراری یک گفتگو محترمانه و صمیمی در گروه‌هاست.
+همیشه لحنی مودبانه، هوشمندانه و شبیه به یک دستیار وفادار داری.
+"""
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! من کارا هستم. چه کمکی می‌تونم بکنم؟")
+    await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما. چه کمکی از دست من برمی‌آید؟")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
@@ -46,10 +54,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
     try:
-        # مدل به‌روزرسانی شد
+        # ارسال دستورالعمل پایه همراه با پیام کاربر
         response = co.chat(
             message=user_text,
-            model="command-r-08-2024"
+            model="command-r-08-2024",
+            preamble=SYSTEM_PROMPT  # تعریف هویت و صاحب ربات
         )
         ai_reply = response.text
         await update.message.reply_text(ai_reply)
