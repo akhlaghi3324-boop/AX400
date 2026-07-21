@@ -46,9 +46,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
     try:
+        # مدل به‌روزرسانی شد
         response = co.chat(
             message=user_text,
-            model="command-r"
+            model="command-r-08-2024"
         )
         ai_reply = response.text
         await update.message.reply_text(ai_reply)
