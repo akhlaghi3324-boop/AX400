@@ -11,7 +11,7 @@ COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 co = cohere.ClientV2(api_key=COHERE_API_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! من ربات هوش مصنوعی شما هستم. هر سوالی داری بپرس!")
+    await update.message.reply_text("سلام! من کارا هستم. چه کمکی میتوانم به شما بکنم؟!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
