@@ -35,13 +35,23 @@ SYSTEM_PROMPT = """
 تو حافظه گفتگو داری و پیام‌های قبلی کاربر را به یاد می‌آوری تا مکالمه‌ای روان و طبیعی داشته باشی.
 """
 
-# ذخیره‌سازی تاریخچه چت‌ها (حافظه)
-# این دیکشنری پیام‌های اخیر هر چت را نگهداری می‌کند
+# ذخیره‌سازی تاریخچه چت‌ها و پیام‌های اخیر گروه
 chat_histories = {}
-MAX_HISTORY_LENGTH = 10  # تعداد پیام‌های نگه‌داری‌شده در حافظه
+group_recent_messages = {}  # ذخیره پیام‌های گروه برای خلاصه‌سازی
+MAX_HISTORY_LENGTH = 10
+MAX_GROUP_MESSAGES = 30     # تعداد پیام‌هایی که برای خلاصه‌سازی در گروه ذخیره می‌شوند
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("سلام! من کارا هستم، دستیار هوشمند شما. من صحبت‌های قبلی‌مان را به یاد می‌آورم!")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🤖 **راهنمای استفاده از اندروید کارا در گروه:**\n\n"
+        "1️⃣ برای گفتگو در گروه، کافیست روی پیام من **Reply** کنید یا آیدی من را **Mention** کنید.\n"
+        "2️⃣ **`/summary`**: دریافت خلاصه‌ای از آخرین گفتگوهای گروه.\n"
+        "3️⃣ **`/clear`**: پاک کردن حافظه مکالمات اختصاصی.\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_username = update.effective_user.username
@@ -50,7 +60,6 @@ async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("🟢 بله سرور کاملاً بیدار و فعال است !")
 
-# دستور پاک کردن حافظه چت
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in chat_histories:
@@ -59,14 +68,56 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("حافظه‌ای برای پاک کردن وجود ندارد.")
 
+# دستور جدید: خلاصه‌سازی پیام‌های اخیر گروه
+async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+
+    if chat_type not in ["group", "supergroup"]:
+        await update.message.reply_text("این دستور فقط در گروه‌ها قابل استفاده است.")
+        return
+
+    messages = group_recent_messages.get(chat_id, [])
+    if len(messages) < 3:
+        await update.message.reply_text("پیام‌های کافی برای خلاصه کردن وجود ندارد.")
+        return
+
+    await update.message.reply_text("⏳ در حال پردازش و خلاصه‌سازی گفتگوهای اخیر گروه...")
+
+    combined_text = "\n".join(messages)
+    prompt = f"لطفاً متن زیر که مکالمات اخیر یک گروه تلگرامی است را به صورت بسیار مرتب، بولت‌پوینت و خلاصه به زبان فارسی توضیح بده:\n\n{combined_text}"
+
+    try:
+        response = co.chat(
+            message=prompt,
+            model="command-r-08-2024",
+            preamble="تو یک دستیار هوشمند هستی که وظیفه داری گفتگوهای گروه را به صورت خلاصه و مفید جمع‌بندی کنی."
+        )
+        await update.message.reply_text(f"📊 **خلاصه مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"خطا در ایجاد خلاصه: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
     user_text = update.message.text
     bot_username = context.bot.username
 
-    # بررسی شرط پاسخ در گروه
+    # نادیده گرفتن پیام‌های غیرمتنی یا پیام‌های خالی (مثل استیکر)
+    if not user_text:
+        return
+
+    # ذخیره پیام‌های تمام کاربران گروه برای دستور خلاصه‌سازی
     if chat_type in ["group", "supergroup"]:
+        user_name = update.effective_user.first_name or "کاربر"
+        if chat_id not in group_recent_messages:
+            group_recent_messages[chat_id] = []
+        
+        group_recent_messages[chat_id].append(f"{user_name}: {user_text}")
+        if len(group_recent_messages[chat_id]) > MAX_GROUP_MESSAGES:
+            group_recent_messages[chat_id].pop(0)
+
+        # بررسی شرط پاسخگویی ربات در گروه (فقط ریپلای یا منشن)
         is_replied_to_bot = (
             update.message.reply_to_message 
             and update.message.reply_to_message.from_user.id == context.bot.id
@@ -78,25 +129,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
-    # مقداردهی اولیه حافظه برای این چت در صورت عدم وجود
+    # مقداردهی اولیه حافظه برای این چت
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
 
     try:
-        # ارسال پیام و دریافت پاسخ با در نظر گرفتن تاریخچه چت
         response = co.chat(
             message=user_text,
             model="command-r-08-2024",
             preamble=SYSTEM_PROMPT,
-            chat_history=chat_histories[chat_id]  # ارسال پیام‌های قبلی به Cohere
+            chat_history=chat_histories[chat_id]
         )
         ai_reply = response.text
 
-        # به روزرسانی تاریخچه مکالمات در حافظه
+        # به روزرسانی تاریخچه مکالمات
         chat_histories[chat_id].append({"role": "USER", "message": user_text})
         chat_histories[chat_id].append({"role": "CHATBOT", "message": ai_reply})
 
-        # محدود نگه داشتن حجم حافظه تا حداکثر تعداد مشخص‌شده
         if len(chat_histories[chat_id]) > MAX_HISTORY_LENGTH * 2:
             chat_histories[chat_id] = chat_histories[chat_id][-MAX_HISTORY_LENGTH * 2:]
 
@@ -109,8 +158,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ping", ping_command))
-    app.add_handler(CommandHandler("clear", clear_history))  # دستور پاک کردن حافظه
+    app.add_handler(CommandHandler("clear", clear_history))
+    app.add_handler(CommandHandler("summary", summarize_group)) # ثبت دستور خلاصه‌سازی
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app.run_polling()
