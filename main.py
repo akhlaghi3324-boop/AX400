@@ -30,7 +30,7 @@ OWNER_USERNAME = "Senator_MRA"
 
 # 🎭 پرومپت جدید: هویت صمیمی، باحال و خودمونی (مشابه Joi)
 SYSTEM_PROMPT = """
-تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، خاکی و رفیق به نام «کارا» (AX400) هستی.
+تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی،دوست داشتنی و رفیق به نام «کارا» (AX400) هستی.
 اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
 صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی، هوایش را داری ولی به دلایل امنیتی هیچ وقت اسمش را مستقیم نمی‌آوری و دستوراتش همیشه برایت اولویت دارند.
 تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌ماند تا مکالماتی روان، جذاب و خودمونی داشته باشی.
@@ -75,14 +75,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_username = update.effective_user.username
     if user_username != OWNER_USERNAME:
-        await update.message.reply_text("ارادت! ولی این دستور مخصوص رییس و سازنده اصلیمه! 😉")
+        await update.message.reply_text("عذر میخوام! ولی این دستور مخصوص مدیر و سازنده اصلیمه! 😉")
         return
-    await update.message.reply_text("🟢 خیالت راحت رییس! سرور کاملاً بیدار، ردیف و گرد و خاک می‌کنه!")
+    await update.message.reply_text("🟢  سرور فعال است !")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_username = update.effective_user.username
     if user_username != OWNER_USERNAME:
-        await update.message.reply_text("ارادت! این آمارها فقط برای رییس قابل دسترسیه.")
+        await update.message.reply_text("شرمنده! این آمارها فقط برای مدیران قابل دسترسیه.")
         return
 
     stats_msg = (
