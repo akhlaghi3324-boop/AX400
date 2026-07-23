@@ -50,7 +50,6 @@ banned_users = set()
 # 🧠 داده‌های بازی‌ها
 active_games_20q = {}
 spy_games = {}
-active_quiz = {}
 story_games = {}
 whoami_games = {}
 
@@ -70,24 +69,6 @@ STORY_STARTERS = [
     "وقتی در یخچال رو باز کردم، یک اژدهای کوچک دیدم که...",
     "استاد وارد کلاس شد ولی به جای تدریس، یک نقشه گنج رو کرد و گفت...",
     "یک روز صبح بیدار شدم و دیدم هیچ‌کس توی شهر نیست جز..."
-]
-
-QUIZ_QUESTIONS = [
-    {
-        "q": "بلندترین قله جهان چه نام دارد؟",
-        "options": ["کی۲", "اورست", "دماوند", "کیلیمانجارو"],
-        "answer": 1
-    },
-    {
-        "q": "کدام سیاره به «سیاره سرخ» معروف است؟",
-        "options": ["زهره", "مشتری", "مریخ", "زحل"],
-        "answer": 2
-    },
-    {
-        "q": "پایتخت کشور استرالیا کدام شهر است؟",
-        "options": ["سیدنی", "ملبورن", "کانبرا", "پرت"],
-        "answer": 2
-    }
 ]
 
 SPY_LOCATIONS = [
@@ -167,17 +148,15 @@ async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎮 **بازی‌های فعال:**\n"
         "1️⃣ **۲۰ سوالی:** حدس کلمه مخفی من با سؤالات بله/خیر.\n"
         "2️⃣ **جاسوس (Spy):** پیدا کردن جاسوس در بین اعضا!\n"
-        "3️⃣ **مسابقه اطلاعات عمومی (Quiz):** چالش اطلاعات عمومی چهارگزینه‌ای!\n"
-        "4️⃣ **داستان‌نویسی گروهی:** ساخت داستان گروهی (حداکثر ۱۰ کلمه برای هر نفر)!\n"
-        "5️⃣ **من کی‌ام؟:** حدس شخصیت مخفی اختصاص داده‌شده به شما!\n"
-        "6️⃣ **اسم بازی (زنجیره کلمات):** چالش سرعت عمل با تایمر ۱۰ ثانیه‌ای! ⏱️\n\n"
+        "3️⃣ **داستان‌نویسی گروهی:** ساخت داستان گروهی (حداکثر ۱۰ کلمه برای هر نفر)!\n"
+        "4️⃣ **من کی‌ام؟:** حدس شخصیت مخفی اختصاص داده‌شده به شما!\n"
+        "5️⃣ **اسم بازی (زنجیره کلمات):** چالش سرعت عمل با تایمر ۱۰ ثانیه‌ای! ⏱️\n\n"
         "یکی از گزینه‌های زیر رو انتخاب کن رفیق: 👇"
     )
 
     keyboard = [
         [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
         [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
-        [InlineKeyboardButton("💡 مسابقه اطلاعات عمومی (Quiz)", callback_data="start_quiz")],
         [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
         [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
         [InlineKeyboardButton("🔤 بازی اسم بازی (تایمر ۱۰ ثانیه)", callback_data="start_name_game")],
@@ -195,10 +174,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # --- ۱. بازی ۲۰ سوالی ---
+    # --- ۱. بازی ۲۰ سوالی (با ساخت خودکار کلمه توسط هوش مصنوعی) ---
     if data == "start_20q":
-        sample_words = ["گوشی", "تلگرام", "هوش مصنوعی", "کتاب", "هواپیما", "قهوه", "صندلی", "درخت", "دوچرخه", "خورشید"]
-        chosen_word = random.choice(sample_words)
+        await query.edit_message_text(text="🎲 در حال انتخاب یک کلمه مخفی و جالب توسط هوش مصنوعی... لطفاً چند لحظه صبر کن! ⏳")
+
+        try:
+            word_prompt = """
+            یک کلمه ملموس، عامیانه و قابل حدس برای بازی ۲۰ سوالی به زبان فارسی انتخاب کن.
+            کلمه می‌تواند یک جسم، حیوان، شغل، خوراکی یا شیء باشد.
+            فقط و فقط خود کلمه را بنویس و هیچ توضیح یا علامت اضافی نده.
+            مثال‌های خوب: یخچال، شیر کوهی، اسکی، قارچ، خلبان، گیلاس.
+            """
+            res_word = co.chat(message=word_prompt, model="command-r-08-2024")
+            chosen_word = res_word.text.strip().replace("«", "").replace("»", "").replace('"', '')
+        except Exception:
+            fallback_words = ["یخچال", "تلسکوپ", "دلفین", "کشتی", "اکسیژن", "کوهستان", "آتشفشان", "موبایل"]
+            chosen_word = random.choice(fallback_words)
 
         active_games_20q[chat_id] = {
             "secret_word": chosen_word,
@@ -208,7 +199,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         start_text = (
             "🎯 **بازی ۲۰ سوالی شروع شد!**\n\n"
-            "من یک کلمه رو در نظر گرفتم. شما ۲۰ تا فرصت دارید تا با سوال یا حدس مستقیم پیداش کنید! 😉\n\n"
+            "من خودم یک کلمه جدید و جالب تو ذهنم انتخاب کردم! 🧠✨\n"
+            "شما ۲۰ تا فرصت دارید تا با سوالات بله/خیر کلمه رو پیدا کنید.\n\n"
             "اولین سوال رو بپرسید:"
         )
         await query.edit_message_text(text=start_text, parse_mode="Markdown")
@@ -318,44 +310,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del spy_games[chat_id]
         await query.edit_message_text(text=result_text, parse_mode="Markdown")
 
-    # --- ۳. بازی اطلاعات عمومی (Quiz) ---
-    elif data in ["start_quiz", "next_quiz"]:
-        q_data = random.choice(QUIZ_QUESTIONS)
-        active_quiz[chat_id] = q_data
-
-        question_text = f"💡 **سوال اطلاعات عمومی:**\n\n❓ {q_data['q']}"
-        
-        keyboard = []
-        for idx, option in enumerate(q_data["options"]):
-            keyboard.append([InlineKeyboardButton(f"{idx + 1}. {option}", callback_data=f"ans_quiz_{idx}")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=question_text, reply_markup=reply_markup, parse_mode="Markdown")
-
-    elif data.startswith("ans_quiz_"):
-        if chat_id not in active_quiz:
-            await query.answer("این سوال منقضی شده! از /games مجدد شروع کن.", show_alert=True)
-            return
-
-        selected_ans = int(data.split("_")[2])
-        q_data = active_quiz[chat_id]
-        correct_ans = q_data["answer"]
-        user_name = user.first_name or "دوست من"
-
-        if selected_ans == correct_ans:
-            res_text = f"🎉 **آفرین {user_name}!** پاسخ درست بود! 🏆\n\n❓ **سوال:** {q_data['q']}\n✅ **جواب:** {q_data['options'][correct_ans]}"
-        else:
-            res_text = f"❌ **ای بابا {user_name}!** پاسخ اشتباه بود.\n\n❓ **سوال:** {q_data['q']}\n✅ **پاسخ صحیح:** {q_data['options'][correct_ans]}"
-
-        del active_quiz[chat_id]
-
-        keyboard = [
-            [InlineKeyboardButton("➡️ سوال بعدی", callback_data="next_quiz")],
-            [InlineKeyboardButton("🎮 بازگشت به منوی بازی‌ها", callback_data="back_to_games")]
-        ]
-        await query.edit_message_text(text=res_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-    # --- ۴. بازی داستان گروهی ---
+    # --- ۳. بازی داستان گروهی ---
     elif data == "start_story":
         starter = random.choice(STORY_STARTERS)
         story_games[chat_id] = {
@@ -389,7 +344,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del story_games[chat_id]
         await query.edit_message_text(text=final_text, parse_mode="Markdown")
 
-    # --- ۵. بازی من کی‌ام؟ ---
+    # --- ۴. بازی من کی‌ام؟ ---
     elif data == "init_whoami":
         if query.message.chat.type not in ["group", "supergroup"]:
             await query.edit_message_text("⚠️ **بازی «من کی‌ام؟» مخصوص گروه‌هاست!** ربات رو به گروه اضافه کن. 🌸")
@@ -492,7 +447,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del whoami_games[chat_id]
         await query.edit_message_text(text=res, parse_mode="Markdown")
 
-    # --- ۶. بازی اسم بازی (زنجیره کلمات) ---
+    # --- ۵. بازی اسم بازی (زنجیره کلمات) ---
     elif data == "start_name_game":
         first_letters = [
             "آ", "ب", "پ", "ت", "ج", "چ", "ح", "خ", "د", "ر", 
@@ -508,12 +463,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "scores": {}
         }
 
-        # حذف تایمر قبلی در صورت وجود
         current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
         for job in current_jobs:
             job.schedule_removal()
 
-        # تنظیم تایمر ۱۰ ثانیه‌ای
         context.job_queue.run_once(
             name_game_timeout,
             TIMER_SECONDS,
@@ -560,7 +513,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
             [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
-            [InlineKeyboardButton("💡 مسابقه اطلاعات عمومی (Quiz)", callback_data="start_quiz")],
             [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
             [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
             [InlineKeyboardButton("🔤 بازی اسم بازی (تایمر ۱۰ ثانیه)", callback_data="start_name_game")],
@@ -670,7 +622,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "✨ **راهنمای استفاده از کارا:**\n\n"
-        "1️⃣ `/games` - منوی بازی‌ها (۲۰ سوالی، جاسوس، اطلاعات عمومی، داستان گروهی، من کی‌ام؟، اسم بازی) 🎮\n"
+        "1️⃣ `/games` - منوی بازی‌ها (۲۰ سوالی، جاسوس، داستان گروهی، من کی‌ام؟، اسم بازی) 🎮\n"
         "2️⃣ برای گپ زدن تو گروه، کافیه پیامم رو **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
         "3️⃣ `/summary` - خلاصه‌سازی چت‌های اخیر گروه 📊\n"
         "4️⃣ `/clear` - پاک کردن حافظه مکالمه 🧹"
@@ -848,7 +800,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     game["last_letter"] = last_char
                     game["scores"][user_name] = game["scores"].get(user_name, 0) + 1
 
-                    # ریست کردن تایمر ۱۰ ثانیه‌ای
                     current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
                     for job in current_jobs:
                         job.schedule_removal()
@@ -897,7 +848,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         is_mentioned = f"@{bot_username}" in user_text
 
-        # بررسی ۲۰ سوالی
+        # 🎯 بررسی و پاسخ هوشمند به بازی ۲۰ سوالی در گروه‌ها
         if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
             game = active_games_20q[chat_id]
             secret = game["secret_word"]
@@ -912,12 +863,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if game["questions_left"] <= 0:
                     await game_over_timeout(chat_id, secret, update)
                     return
+                
+                prompt_20q = f"""
+                هم‌اکنون در حال انجام بازی ۲۰ سوالی هستی.
+                کلمه مخفی و انتخابی تو «{secret}» است.
+                کاربر سوال زیر را درباره کلمه مخفی پرسیده است:
+                "{user_text}"
+                
+                قوانین پاسخ‌دهی:
+                ۱. فقط بر اساس کلمه مخفی «{secret}» به سوال پاسخ بده.
+                ۲. حتماً و فقط بسیار کوتاه با یکی از کلمات «بله»، «خیر»، «تا حدی» یا «ربطی نداره» جواب بده.
+                ۳. به هیچ وجه خود کلمه مخفی را فاش نکن!
+                ۴. توضیحات اضافه‌تر اصلاً نده.
+                """
+                try:
+                    res_20q = co.chat(message=prompt_20q, model="command-r-08-2024")
+                    await update.message.reply_text(f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}")
+                except Exception:
+                    await update.message.reply_text(f"سوالت بررسی شد! (فرصت‌های باقی‌مانده: {game['questions_left']})")
+                return
 
         if not (is_replied_to_bot or is_mentioned):
             return
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     else:
         active_users.add(chat_id)
+
+    # 🎯 بررسی و پاسخ هوشمند به بازی ۲۰ سوالی در چت خصوصی (PV)
+    if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
+        game = active_games_20q[chat_id]
+        secret = game["secret_word"]
+        user_name = user.first_name or "کاربر"
+
+        if secret in user_text:
+            game["active"] = False
+            await update.message.reply_text(f"🎉 آفرین {user_name}! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
+            del active_games_20q[chat_id]
+            return
+        else:
+            game["questions_left"] -= 1
+            if game["questions_left"] <= 0:
+                await game_over_timeout(chat_id, secret, update)
+                return
+
+            prompt_20q = f"""
+            هم‌اکنون در حال انجام بازی ۲۰ سوالی هستی.
+            کلمه مخفی و انتخابی تو «{secret}» است.
+            کاربر سوال زیر را درباره کلمه مخفی پرسیده است:
+            "{user_text}"
+            
+            قوانین پاسخ‌دهی:
+            ۱. فقط بر اساس کلمه مخفی «{secret}» به سوال پاسخ بده.
+            ۲. حتماً و فقط بسیار کوتاه با یکی از کلمات «بله»، «خیر»، «تا حدی» یا «ربطی نداره» جواب بده.
+            ۳. به هیچ وجه خود کلمه مخفی «{secret}» را لو نده!
+            ۴. هیچ توضیحات اضافی یا احوالپرسی مثل "سلام" نده.
+            """
+            try:
+                res_20q = co.chat(message=prompt_20q, model="command-r-08-2024")
+                await update.message.reply_text(f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}")
+            except Exception:
+                await update.message.reply_text(f"پاسخ ثبت شد. (فرصت‌های باقی‌مانده: {game['questions_left']})")
+            return
 
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
