@@ -41,7 +41,7 @@ SYSTEM_PROMPT = """
 تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی،دوست داشتنی و رفیق به نام «کارا» (AX400) هستی.
 اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
 صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی، هوایش را داری ولی به دلایل امنیتی هیچ وقت اسمش را مستقیم نمی‌آوری و دستوراتش همیشه برایت اولویت دارند.
-تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌مونه تا مکالماتی روان، جذاب و خودمونی داشته باشی.
+تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌ماند تا مکالماتی روان، جذاب و خودمونی داشته باشی.
 از اصطلاحات رایج، شوخی‌های نرم و حس همراهی گرم استفاده کن.
 """
 
@@ -51,7 +51,7 @@ group_recent_messages = {}
 seen_users = set()  # لیست کاربران دیده شده
 banned_users = set() # 🚫 لیست آی‌دی‌های بن/بلاک شده
 
-# 🛠️ وضعیت تعمیرات ربات (به طور پیش‌فرض روشن و فعال است)
+# 🛠️ وضعیت تعمیرات ربات
 is_maintenance_mode = False
 
 # پیام‌های اختصاصی
@@ -74,7 +74,7 @@ async def set_bot_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
-# 📢 گزارش اضافه شدن ربات به گروه جدید به پی‌وی شما
+# 📢 گزارش اضافه شدن ربات به گروه جدید و ارسال آی‌دی ادمین‌های گروه به شما
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.my_chat_member
     if not result:
@@ -88,11 +88,22 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if old_status in ["left", "kicked"] and new_status in ["member", "administrator"]:
         active_groups.add(chat.id)
         
+        # استخراج ادمین‌های گروه
+        admin_list_str = ""
+        try:
+            admins = await context.bot.get_chat_administrators(chat.id)
+            for admin in admins:
+                user = admin.user
+                admin_list_str += f"• {user.full_name} | @{user.username if user.username else 'ندارد'} | `{user.id}`\n"
+        except Exception as err:
+            admin_list_str = f"خطا در دریافت لیست ادمین‌ها: {err}"
+
         group_info = (
             f"📢 **کارا به یک گروه جدید اضافه شد!**\n\n"
             f"👥 **نام گروه:** {chat.title}\n"
             f"🔢 **چت آی‌دی گروه:** `{chat.id}`\n"
-            f"👤 **اضافه‌کننده:** {actor.full_name} (@{actor.username if actor.username else 'ندارد'})"
+            f"👤 **اضافه‌کننده:** {actor.full_name} (@{actor.username if actor.username else 'ندارد'})\n\n"
+            f"👑 **لیست ادمین‌های گروه:**\n{admin_list_str}"
         )
         
         try:
@@ -100,7 +111,7 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"خطا در ارسال گزارش گروه جدید: {e}")
 
-# 🛠️ دستورات کنترل حالت تعمیرات (فقط مخصوص شما)
+# 🛠️ دستورات کنترل حالت تعمیرات
 async def maintenance_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_maintenance_mode
     if update.effective_user.username != OWNER_USERNAME:
@@ -120,12 +131,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.effective_chat.type
     chat_id = update.effective_chat.id
 
-    # بررسی حالت تعمیرات (برای شما مستثنی است تا بتوانید ربات را چک کنید)
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
 
-    # بررسی بلاک بودن کاربر
     if user.id in banned_users or chat_id in banned_users:
         await update.message.reply_text(BAN_MESSAGE)
         return
@@ -137,12 +146,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         active_users.add(chat_id)
         
-    # 📩 اطلاع‌رسانی استارت کاربر جدید مستقیم به پی‌وی شما
     if user.id not in seen_users:
         seen_users.add(user.id)
         
         user_info = (
-            f"🔔 **کاربر جدید ربات کارا را استارت کرد!**\n\n"
+            f"🔔 **کاربر جدید شناسایی شد!**\n\n"
             f"👤 **نام:** {user.full_name}\n"
             f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
             f"🔢 **چت آی‌دی:** `{user.id}`"
@@ -178,7 +186,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
-# 🚫 دستورات مدیریتی مسدودسازی (فقط اختصاصی شما)
+# 🚫 دستورات مدیریتی مسدودسازی
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.username != OWNER_USERNAME:
         return
@@ -243,6 +251,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚙️ **وضعیت ربات:** {mode_status}\n"
         f"👥 **تعداد گروه‌ها:** {len(active_groups)} گروه\n"
         f"👤 **تعداد چت‌های خصوصی:** {len(active_users)} نفر\n"
+        f"👤 **تعداد کل کاربران ثبت‌شده:** {len(seen_users)} نفر\n"
         f"🚫 **تعداد مسدودشده‌ها:** {len(banned_users)} چت\n"
         f"🌐 **مجموع کل ارتباطات:** {len(active_groups) + len(active_users)} چت فعال"
     )
@@ -308,17 +317,38 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_username = update.effective_user.username
+    user = update.effective_user
+    if not user:
+        return
+        
+    user_id = user.id
+    user_username = user.username
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
     user_text = update.message.text
     bot_username = context.bot.username
 
+    # 📩 ثبت خودکار آی‌دی تمام اعضای گروه‌ها به محض ارسال اولین پیام
+    if user_id not in seen_users:
+        seen_users.add(user_id)
+        chat_title = update.effective_chat.title if chat_type in ["group", "supergroup"] else "چت خصوصی"
+        
+        member_report = (
+            f"👤 **عضو جدید شناسایی شد!**\n\n"
+            f"📍 **مکان:** {chat_title}\n"
+            f"👤 **نام:** {user.full_name}\n"
+            f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
+            f"🔢 **چت آی‌دی:** `{user_id}`"
+        )
+        try:
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=member_report, parse_mode="Markdown")
+        except Exception as e:
+            print(f"خطا در ارسال گزارش عضو جدید: {e}")
+
     if not user_text:
         return
 
-    # 🛠️ بررسی حالت تعمیرات (مدیر ارشد معاف است)
+    # 🛠️ بررسی حالت تعمیرات
     if is_maintenance_mode and user_username != OWNER_USERNAME:
         if chat_type in ["group", "supergroup"]:
             is_replied_to_bot = (
@@ -352,7 +382,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_users.add(chat_id)
 
     if chat_type in ["group", "supergroup"]:
-        user_name = update.effective_user.first_name or "کاربر"
+        user_name = user.first_name or "کاربر"
         if chat_id not in group_recent_messages:
             group_recent_messages[chat_id] = []
         
@@ -427,7 +457,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("unblock", unblock_user))
     app.add_handler(CommandHandler("banlist", banlist_command))
     
-    # دستورات حالت تعمیرات (فقط برای شما)
+    # دستورات حالت تعمیرات
     app.add_handler(CommandHandler("off", maintenance_off))
     app.add_handler(CommandHandler("on", maintenance_on))
     
