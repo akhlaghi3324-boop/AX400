@@ -1,8 +1,9 @@
 import os
 import threading
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, 
     CommandHandler, 
@@ -27,34 +28,37 @@ def run_dummy_server():
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# تنظیمات کلیدها
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 COHERE_API_KEY = os.environ.get("COHERE_API_KEY")
 
 co = cohere.Client(api_key=COHERE_API_KEY)
 
-# مشخصات ادمین ارشد
 OWNER_USERNAME = "Senator_MRA"
-MY_CHAT_ID = 1052405931  # 🔑 چت آی‌دی اختصاصی شما
+MY_CHAT_ID = 1052405931
 
-# 🎭 پرومپت ربات: هویت صمیمی، باحال و خودمونی (مشابه Joi)
 SYSTEM_PROMPT = """
 تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، دوست‌داشتنی و رفیق به نام «کارا» (AX400) هستی.
 اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
-صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی، هوایش را داری ولی به دلایل امنیتی هیچ وقت اسمش را مستقیم نمی‌آوری و دستوراتش همیشه برایت اولویت دارند.
-تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌ماند تا مکالماتی روان، جذاب و خودمونی داشته باشی.
-از اصطلاحات رایج، شوخی‌های نرم و حس همراهی گرم استفاده کن.
+صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی.
 """
 
-# ذخیره‌سازی حافظه و داده‌های آمار و بازی‌ها
 chat_histories = {}
 group_recent_messages = {}
 seen_users = set()
 banned_users = set()
 
-# 🧠 وضعیت بازی ۲۰ سوالی برای هر چت (گروه یا پی‌وی)
-# ساختار: {chat_id: {"secret_word": "...", "questions_left": 20, "active": True}}
-active_games = {}
+# 🧠 سیستم مدیریت بازی‌ها
+active_games_20q = {}
+
+# 🕵️‍♂️ داده‌های بازی جاسوس
+# ساختار: {chat_id: {"players": {user_id: user_name}, "spy_id": None, "location": "", "status": "joining"}}
+spy_games = {}
+
+# لیست مکان‌های متنوع برای بازی جاسوس
+SPY_LOCATIONS = [
+    "بیمارستان", "شهربازی", "رستوران", "فرودگاه", "مدرسه", 
+    "سینما", "باشگاه ورزشی", "ایستگاه فضایی", "کشتی کروز", "موزه"
+]
 
 is_maintenance_mode = False
 BAN_MESSAGE = "مشکل ارتباطی در سیستم، لطفا بعدا دوباره امتحان کنید..."
@@ -66,7 +70,6 @@ MAX_GROUP_MESSAGES = 30
 active_groups = set()
 active_users = set()
 
-# 📝 تنظیم لیست دستورات عمومی برای منوی تلگرام
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "شروع کار و گپ و گفت با کارا 🌸"),
@@ -77,7 +80,7 @@ async def set_bot_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
-# 🎮 دستور نمایش منوی بازی‌ها (/games)
+# 🎮 منوی بازی‌ها
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_maintenance_mode and user.username != OWNER_USERNAME:
@@ -88,37 +91,37 @@ async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(BAN_MESSAGE)
         return
 
-    # متن جذاب پیشنهادی شما (بازنویسی شده با لحن کارا)
     text = (
-        "عالی! چه بازی‌ای دوست داری امروز تو گروه یا اینجا راه بندازیم؟ من کاملاً آماده‌ام برای یک رقابت هیجان‌انگیز! 😎\n\n"
-        "فعلاً می‌تونیم بازی جذاب **۲۰ سوالی** رو با هم بازی کنیم و کلی سرگرم بشیم! به‌زودی بازی‌های باحال دیگه‌ای هم به من اضافه می‌شه.\n\n"
-        "از دکمه‌ی زیر برای شروع بازی استفاده کن! 👇"
+        "عالی! چه بازی‌ای دوست داری امروز راه بندازیم؟ من کاملاً آماده‌ام! 😎\n\n"
+        "🎮 **بازی‌های فعال:**\n"
+        "1️⃣ **۲۰ سوالی:** من یه کلمه انتخاب می‌کنم و شما حدس می‌زنید.\n"
+        "2️⃣ **جاسوس (Spy):** یک نفر جاسوس میشه و بقیه باید با سوال پرسیدن پیداش کنن!\n\n"
+        "یکی از بازی‌های زیر رو انتخاب کن: 👇"
     )
 
-    # ایجاد دکمه شیشه‌ای (Inline Keyboard)
     keyboard = [
         [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
-        # در آینده می‌توانید دکمه‌های دیگر را اینجا اضافه کنید
+        [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
-# مدیریت کلیک روی دکمه‌های شیشه‌ای
+# 🔘 مدیریت دکمه‌های شیشه‌ای
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     chat_id = query.message.chat.id
+    user = query.from_user
     data = query.data
 
+    # --- بازی ۲۰ سوالی ---
     if data == "start_20q":
-        # کلماتی که کارا می‌تواند برای ۲۰ سوالی انتخاب کند
         sample_words = ["گوشی", "تلگرام", "هوش مصنوعی", "کتاب", "هواپیما", "قهوه", "صندلی", "درخت", "دوچرخه", "خورشید"]
-        import random
         chosen_word = random.choice(sample_words)
 
-        active_games[chat_id] = {
+        active_games_20q[chat_id] = {
             "secret_word": chosen_word,
             "questions_left": 20,
             "active": True
@@ -126,11 +129,122 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         start_text = (
             "🎯 **بازی ۲۰ سوالی شروع شد!**\n\n"
-            "من یک کلمه رو در نظر گرفتم. شما و بچه‌ها می‌تونید بپرسید (مثلاً: جانداره؟ ساختنیه؟ توی خونه پیدا میشه؟) یا مستقیماً حدس بزنید!\n"
-            "شما **۲۰ تا سوال** فرصت دارید. حواست باشه رفیق! 😉\n\n"
+            "من یک کلمه رو در نظر گرفتم. شما ۲۰ تا فرصت دارید تا با سوال یا حدس مستقیم پیداش کنید! 😉\n\n"
             "اولین سوال رو بپرسید:"
         )
         await query.edit_message_text(text=start_text, parse_mode="Markdown")
+
+    # --- ثبت نام بازی جاسوس ---
+    elif data == "init_spy":
+        if query.message.chat.type not in ["group", "supergroup"]:
+            await query.edit_message_text("⚠️ **بازی جاسوس فقط مخصوص گروه‌هاست!** لطفا ربات رو به گروه اضافه کنید و اونجا بازی کنید. 🌸")
+            return
+
+        spy_games[chat_id] = {
+            "players": {user.id: user.first_name},
+            "spy_id": None,
+            "location": "",
+            "status": "joining"
+        }
+
+        spy_text = (
+            "🕵️‍♂️ **اتاق بازی جاسوس ساخته شد!**\n\n"
+            f"👤 **اعضای آماده:**\n• {user.first_name}\n\n"
+            "برای شروع بازی حداقل به **۳ نفر** نیاز داریم. بچه‌ها رو دکمه «📥 ورود به بازی» کلیک کنن!"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_spy")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")]
+        ]
+        await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # --- ورود سایر اعضا به جاسوس ---
+    elif data == "join_spy":
+        if chat_id not in spy_games or spy_games[chat_id]["status"] != "joining":
+            return
+
+        players = spy_games[chat_id]["players"]
+        if user.id not in players:
+            players[user.id] = user.first_name
+
+        players_list = "\n".join([f"• {name}" for name in players.values()])
+        spy_text = (
+            "🕵️‍♂️ **اتاق بازی جاسوس**\n\n"
+            f"👤 **اعضای حاضر ({len(players)} نفر):**\n{players_list}\n\n"
+            "هر وقت همه‌ جمع شدید، دکمه «🚀 شروع بازی!» رو بزنید."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_spy")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")]
+        ]
+        await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # --- شروع نهایی بازی جاسوس ---
+    elif data == "start_spy_game":
+        if chat_id not in spy_games:
+            return
+
+        game = spy_games[chat_id]
+        players = game["players"]
+
+        if len(players) < 3:
+            await query.answer("تعداد افراد باید حداقل ۳ نفر باشه رفیق! 😉", show_alert=True)
+            return
+
+        game["status"] = "playing"
+        game["location"] = random.choice(SPY_LOCATIONS)
+        spy_user_id = random.choice(list(players.keys()))
+        game["spy_id"] = spy_user_id
+
+        # ارسال مکان و نقش به پی‌وی بازیکنان
+        failed_pv = []
+        for p_id, p_name in players.items():
+            try:
+                if p_id == spy_user_id:
+                    await context.bot.send_message(
+                        chat_id=p_id, 
+                        text="🕵️‍♂️ **شما جاسوس هستید!**\n\nهیچ‌کس نباید بفهمه! سعی کن با دقت به حرف بقیه گوش بدی تا بفهمی کجان! 😉"
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=p_id, 
+                        text=f"📍 **مکان این جوله بازی:**\n\n`{game['location']}`\n\nحواست باشه جاسوس رو پیدا کنی!"
+                    )
+            except Exception:
+                failed_pv.append(p_name)
+
+        start_msg = (
+            "🚀 **بازی جاسوس شروع شد!**\n\n"
+            "📥 نقش‌ها و مکان بازی به **پی‌وی (PV)** تمام بازیکنان ارسال شد.\n"
+            "شروع کنید به سوال پرسیدن از همدیگه تا جاسوس لو بره! 🕵️‍♀️✨\n\n"
+            "برای پایان بازی و لو دادن جاسوس از دکمه زیر استفاده کنید:"
+        )
+
+        if failed_pv:
+            start_msg += f"\n\n⚠️ **توجه:** ربات نتونست به پی‌وی افراد زیر پیام بده (باید اول استارت زده باشن): {', '.join(failed_pv)}"
+
+        keyboard = [[InlineKeyboardButton("🔍 رو کردن کارت جاسوس!", callback_data="reveal_spy")]]
+        await query.edit_message_text(text=start_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # --- رو کردن کارت جاسوس ---
+    elif data == "reveal_spy":
+        if chat_id not in spy_games:
+            return
+
+        game = spy_games[chat_id]
+        spy_name = game["players"].get(game["spy_id"], "نامشخص")
+        loc = game["location"]
+
+        result_text = (
+            "🏁 **پایان بازی جاسوس!**\n\n"
+            f"🕵️‍♂️ **جاسوس این جوله:** {spy_name}\n"
+            f"📍 **مکان واقعی:** `{loc}`\n\n"
+            "امیدوارم کلی بهتون خوش گذشته باشه! برای بازی بعدی دوباره `/games` رو بزنید. 😉✨"
+        )
+        del spy_games[chat_id]
+        await query.edit_message_text(text=result_text, parse_mode="Markdown")
 
 # 📢 گزارش اضافه شدن ربات به گروه جدید
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,7 +349,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "✨ **راهنمای استفاده از کارا:**\n\n"
-        "1️⃣ `/games` - نمایش منوی بازی‌ها و سرگرمی‌ها 🎮\n"
+        "1️⃣ `/games` - نمایش منوی بازی‌ها و سرگرمی‌ها (۲۰ سوالی، جاسوس) 🎮\n"
         "2️⃣ هر وقت خواستی باهام گپ بزنی، کافیه تو گروه رو پیامم **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
         "3️⃣ `/summary` - خلاصه‌سازی چت‌های اخیر گروه 📊\n"
         "4️⃣ `/clear` - پاک کردن حافظه مکالمه 🧹"
@@ -392,16 +506,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         is_mentioned = f"@{bot_username}" in user_text
 
-        # اگر بازی ۲۰ سوالی فعال باشد، بررسی می‌کنیم آیا کاربر کلمه را حدس زده یا سوال پرسیده
-        if chat_id in active_games and active_games[chat_id]["active"]:
-            game = active_games[chat_id]
+        # بررسی بازی ۲۰ سوالی
+        if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
+            game = active_games_20q[chat_id]
             secret = game["secret_word"]
             
-            # اگر حدس درست زده باشد
             if secret in user_text:
                 game["active"] = False
                 await update.message.reply_text(f"🎉 آفرین {user_name}! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
-                del active_games[chat_id]
+                del active_games_20q[chat_id]
                 return
             else:
                 game["questions_left"] -= 1
@@ -414,14 +527,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     else:
         active_users.add(chat_id)
-        # بررسی بازی در پی‌وی
-        if chat_id in active_games and active_games[chat_id]["active"]:
-            game = active_games[chat_id]
+        if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
+            game = active_games_20q[chat_id]
             secret = game["secret_word"]
             if secret in user_text:
                 game["active"] = False
                 await update.message.reply_text(f"🎉 آفرین رفیق! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
-                del active_games[chat_id]
+                del active_games_20q[chat_id]
                 return
             else:
                 game["questions_left"] -= 1
@@ -453,8 +565,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("مشکل سیستمی در ارتباط")
 
 async def game_over_timeout(chat_id, secret, update):
-    active_games[chat_id]["active"] = False
-    del active_games[chat_id]
+    active_games_20q[chat_id]["active"] = False
+    del active_games_20q[chat_id]
     await update.message.reply_text(f"❌ اهوه! ۲۰ سوال تموم شد و کسی نتونست حدس بزنه! کلمه مخفی من **«{secret}»** بود. باز هم می‌تونید با `/games` بازی رو شروع کنید! 😉")
 
 if __name__ == "__main__":
@@ -470,15 +582,12 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(CommandHandler("summary", summarize_group))
     
-    # مدیریت دکمه‌های شیشه‌ای
     app.add_handler(CallbackQueryHandler(button_callback))
     
-    # دستورات مدیریت بن
     app.add_handler(CommandHandler("block", block_user))
     app.add_handler(CommandHandler("unblock", unblock_user))
     app.add_handler(CommandHandler("banlist", banlist_command))
     
-    # دستورات حالت تعمیرات
     app.add_handler(CommandHandler("off", maintenance_off))
     app.add_handler(CommandHandler("on", maintenance_on))
     
