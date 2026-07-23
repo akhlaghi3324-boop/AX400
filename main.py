@@ -1,6 +1,7 @@
 import os
 import threading
 import random
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
 from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
@@ -52,10 +53,10 @@ active_games_20q = {}
 spy_games = {}
 story_games = {}
 whoami_games = {}
-
-# 🔤 داده‌های بازی «اسم بازی» (زنجیره کلمات)
+trivia_games = {}
 name_games = {}
-TIMER_SECONDS = 10  # زمان‌سنج ۱۰ ثانیه‌ای چالش
+
+TIMER_SECONDS = 10  # زمان‌سنج ۱۰ ثانیه‌ای چالش اسم بازی
 
 FAMOUS_CHARACTERS = [
     "شرلوک هولمز", "بتمن", "مسی", "انشتین", "هری پاتر", 
@@ -86,6 +87,32 @@ MAX_GROUP_MESSAGES = 30
 active_groups = set()
 active_users = set()
 
+# --- تابع ساخت سوال اطلاعات عمومی توسط هوش مصنوعی ---
+def generate_trivia_question():
+    prompt = """
+    یک سوال اطلاعات عمومی جالب و متنوع به زبان فارسی همراه با ۴ گزینه طراحی کن.
+    پاسخ را دقیقاً و فقط در قالب JSON زیر خروجی بده و هیچ متن یا توضیح اضافی قبل یا بعد از آن ننویس:
+
+    {
+        "question": "متن سوال؟",
+        "options": ["گزینه اول", "گزینه دوم", "گزینه سوم", "گزینه چهارم"],
+        "correct_index": 0
+    }
+
+    نکته: correct_index اندیس گزینه درست است (از ۰ تا ۳).
+    """
+    try:
+        response = co.chat(message=prompt, model="command-r-08-2024")
+        clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_text)
+        return data
+    except Exception:
+        return {
+            "question": "پایتخت کشور ایتالیا کدام شهر است؟",
+            "options": ["میلان", "رم", "وینیز", "فلورانس"],
+            "correct_index": 1
+        }
+
 # --- تابع مدیریت اتمام زمان (Timeout) بازی اسم بازی ---
 async def name_game_timeout(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
@@ -102,7 +129,9 @@ async def name_game_timeout(context: ContextTypes.DEFAULT_TYPE):
         new_char = random.choice(first_letters)
         game["last_letter"] = new_char
 
-        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+        keyboard = [
+            [InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]
+        ]
         
         await context.bot.send_message(
             chat_id=chat_id,
@@ -147,15 +176,17 @@ async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "عالی! چه بازی‌ای دوست داری امروز راه بندازیم؟ من کاملاً آماده‌ام برای یک رقابت هیجان‌انگیز! 😎\n\n"
         "🎮 **بازی‌های فعال:**\n"
         "1️⃣ **۲۰ سوالی:** حدس کلمه مخفی من با سؤالات بله/خیر.\n"
-        "2️⃣ **جاسوس (Spy):** پیدا کردن جاسوس در بین اعضا!\n"
-        "3️⃣ **داستان‌نویسی گروهی:** ساخت داستان گروهی (حداکثر ۱۰ کلمه برای هر نفر)!\n"
-        "4️⃣ **من کی‌ام؟:** حدس شخصیت مخفی اختصاص داده‌شده به شما!\n"
-        "5️⃣ **اسم بازی (زنجیره کلمات):** چالش سرعت عمل با تایمر ۱۰ ثانیه‌ای! ⏱️\n\n"
+        "2️⃣ **اطلاعات عمومی:** چالش چهارگزینه‌ای هوشمند! 🧠\n"
+        "3️⃣ **جاسوس (Spy):** پیدا کردن جاسوس در بین اعضا!\n"
+        "4️⃣ **داستان‌نویسی گروهی:** ساخت داستان گروهی!\n"
+        "5️⃣ **من کی‌ام؟:** حدس شخصیت مخفی شما!\n"
+        "6️⃣ **اسم بازی:** چالش سرعت عمل با تایمر ۱۰ ثانیه‌ای! ⏱️\n\n"
         "یکی از گزینه‌های زیر رو انتخاب کن رفیق: 👇"
     )
 
     keyboard = [
         [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
+        [InlineKeyboardButton("💡 چالش اطلاعات عمومی", callback_data="start_trivia")],
         [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
         [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
         [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
@@ -174,7 +205,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # --- ۱. بازی ۲۰ سوالی (با ساخت خودکار کلمه توسط هوش مصنوعی) ---
+    # --- دکمه لغو و پایان عمومی بازی‌ها ---
+    if data == "cancel_game":
+        active_games_20q.pop(chat_id, None)
+        spy_games.pop(chat_id, None)
+        story_games.pop(chat_id, None)
+        whoami_games.pop(chat_id, None)
+        trivia_games.pop(chat_id, None)
+        
+        if chat_id in name_games:
+            current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
+            for job in current_jobs:
+                job.schedule_removal()
+            name_games.pop(chat_id, None)
+
+        await query.edit_message_text("🛑 **بازی با موفقیت متوقف شد.** هر زمان مایل بودید می‌تونید با `/games` دوباره شروع کنید! ✨", parse_mode="Markdown")
+        return
+
+    # --- ۱. بازی ۲۰ سوالی ---
     if data == "start_20q":
         await query.edit_message_text(text="🎲 در حال انتخاب یک کلمه مخفی و جالب توسط هوش مصنوعی... لطفاً چند لحظه صبر کن! ⏳")
 
@@ -183,7 +231,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             یک کلمه ملموس، عامیانه و قابل حدس برای بازی ۲۰ سوالی به زبان فارسی انتخاب کن.
             کلمه می‌تواند یک جسم، حیوان، شغل، خوراکی یا شیء باشد.
             فقط و فقط خود کلمه را بنویس و هیچ توضیح یا علامت اضافی نده.
-            مثال‌های خوب: یخچال، شیر کوهی، اسکی، قارچ، خلبان، گیلاس.
             """
             res_word = co.chat(message=word_prompt, model="command-r-08-2024")
             chosen_word = res_word.text.strip().replace("«", "").replace("»", "").replace('"', '')
@@ -199,13 +246,57 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         start_text = (
             "🎯 **بازی ۲۰ سوالی شروع شد!**\n\n"
-            "من خودم یک کلمه جدید و جالب تو ذهنم انتخاب کردم! 🧠✨\n"
-            "شما ۲۰ تا فرصت دارید تا با سوالات بله/خیر کلمه رو پیدا کنید.\n\n"
+            "من یک کلمه جدید تو ذهنم انتخاب کردم! 🧠✨\n"
+            "۲۰ فرصت دارید تا با سؤالات بله/خیر کلمه رو پیدا کنید.\n\n"
             "اولین سوال رو بپرسید:"
         )
-        await query.edit_message_text(text=start_text, parse_mode="Markdown")
+        keyboard = [[InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]]
+        await query.edit_message_text(text=start_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # --- ۲. بازی جاسوس ---
+    # --- ۲. بازی اطلاعات عمومی ---
+    elif data == "start_trivia":
+        await query.edit_message_text("⏳ در حال طراحی یک سوال اطلاعات عمومی جدید توسط هوش مصنوعی... لطفاً چند لحظه صبر کنید!")
+        q_data = generate_trivia_question()
+
+        trivia_games[chat_id] = {
+            "correct_index": q_data["correct_index"],
+            "question": q_data["question"],
+            "options": q_data["options"],
+            "active": True
+        }
+
+        keyboard = []
+        for idx, option in enumerate(q_data["options"]):
+            keyboard.append([InlineKeyboardButton(f"{idx + 1}️⃣ {option}", callback_data=f"answer_trivia_{idx}")])
+        
+        keyboard.append([InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")])
+
+        text = f"💡 **سوال اطلاعات عمومی:**\n\n{q_data['question']}"
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data.startswith("answer_trivia_"):
+        if chat_id not in trivia_games or not trivia_games[chat_id]["active"]:
+            await query.answer("این بازی تمام شده است!", show_alert=True)
+            return
+
+        user_choice = int(data.split("_")[-1])
+        correct_choice = trivia_games[chat_id]["correct_index"]
+        correct_option_text = trivia_games[chat_id]["options"][correct_choice]
+
+        if user_choice == correct_choice:
+            res_text = f"🎉 **آفرین {user.first_name}!** پاسخ شما کاملاً درست بود! 🏆\nگزینه صحیح: **{correct_option_text}**"
+        else:
+            res_text = f"❌ **اشتباه بود {user.first_name} عزیز!**\nپاسخ صحیح گزینه **«{correct_option_text}»** بود. 😉"
+
+        del trivia_games[chat_id]
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 سوال بعدی", callback_data="start_trivia")],
+            [InlineKeyboardButton("🏁 خروج از بازی", callback_data="cancel_game")]
+        ]
+        await query.edit_message_text(text=res_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # --- ۳. بازی جاسوس ---
     elif data == "init_spy":
         if query.message.chat.type not in ["group", "supergroup"]:
             await query.edit_message_text("⚠️ **بازی جاسوس فقط مخصوص گروه‌هاست!** لطفا ربات رو به گروه اضافه کنید. 🌸")
@@ -221,12 +312,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         spy_text = (
             "🕵️‍♂️ **اتاق بازی جاسوس ساخته شد!**\n\n"
             f"👤 **اعضای آماده:**\n• {user.first_name}\n\n"
-            "برای شروع بازی حداقل به **۳ نفر** نیاز داریم. بچه‌ها رو دکمه «📥 ورود به بازی» کلیک کنن!"
+            "برای شروع بازی حداقل به **۳ نفر** نیاز داریم."
         )
 
         keyboard = [
             [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_spy")],
-            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")]
+            [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_spy")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
         ]
         await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -247,9 +340,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_spy")],
-            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")]
+            [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_spy")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
         ]
         await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "leave_spy":
+        if chat_id in spy_games and spy_games[chat_id]["status"] == "joining":
+            players = spy_games[chat_id]["players"]
+            if user.id in players:
+                del players[user.id]
+                await query.answer("شما از اتاق بازی خارج شدید!", show_alert=True)
+                
+                players_list = "\n".join([f"• {name}" for name in players.values()]) if players else "هیچ‌کس"
+                spy_text = (
+                    "🕵️‍♂️ **اتاق بازی جاسوس**\n\n"
+                    f"👤 **اعضای حاضر ({len(players)} نفر):**\n{players_list}\n\n"
+                    "هر وقت همه‌ جمع شدید، دکمه «🚀 شروع بازی!» رو بزنید."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_spy")],
+                    [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_spy")],
+                    [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_spy_game")],
+                    [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+                ]
+                await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            else:
+                await query.answer("شما هنوز در لیست بازیکنان نیستید!", show_alert=True)
 
     elif data == "start_spy_game":
         if chat_id not in spy_games:
@@ -289,9 +407,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "شروع کنید به سوال پرسیدن از همدیگه تا جاسوس لو بره! 🕵️‍♀️✨"
         )
         if failed_pv:
-            start_msg += f"\n\n⚠️ **توجه:** ربات نتونست به پی‌وی این افراد پیام بده (باید اول ربات رو استارت زده باشن): {', '.join(failed_pv)}"
+            start_msg += f"\n\n⚠️ **توجه:** ربات نتونست به پی‌وی این افراد پیام بده: {', '.join(failed_pv)}"
 
-        keyboard = [[InlineKeyboardButton("🔍 رو کردن کارت جاسوس!", callback_data="reveal_spy")]]
+        keyboard = [
+            [InlineKeyboardButton("🔍 رو کردن کارت جاسوس!", callback_data="reveal_spy")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+        ]
         await query.edit_message_text(text=start_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "reveal_spy":
@@ -310,7 +431,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del spy_games[chat_id]
         await query.edit_message_text(text=result_text, parse_mode="Markdown")
 
-    # --- ۳. بازی داستان گروهی ---
+    # --- ۴. بازی داستان گروهی ---
     elif data == "start_story":
         starter = random.choice(STORY_STARTERS)
         story_games[chat_id] = {
@@ -325,7 +446,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👇 نفر بعدی ادامه بده:"
         )
 
-        keyboard = [[InlineKeyboardButton("🏁 پایان داستان و نمایش متن کامل", callback_data="finish_story")]]
+        keyboard = [
+            [InlineKeyboardButton("📖 پایان داستان و نمایش متن کامل", callback_data="finish_story")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+        ]
         await query.edit_message_text(text=story_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "finish_story":
@@ -344,7 +468,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del story_games[chat_id]
         await query.edit_message_text(text=final_text, parse_mode="Markdown")
 
-    # --- ۴. بازی من کی‌ام؟ ---
+    # --- ۵. بازی من کی‌ام؟ ---
     elif data == "init_whoami":
         if query.message.chat.type not in ["group", "supergroup"]:
             await query.edit_message_text("⚠️ **بازی «من کی‌ام؟» مخصوص گروه‌هاست!** ربات رو به گروه اضافه کن. 🌸")
@@ -363,7 +487,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_whoami")],
-            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")]
+            [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_whoami")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
         ]
         await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -384,9 +510,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_whoami")],
-            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")]
+            [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_whoami")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
         ]
         await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "leave_whoami":
+        if chat_id in whoami_games and whoami_games[chat_id]["status"] == "joining":
+            players = whoami_games[chat_id]["players"]
+            if user.id in players:
+                del players[user.id]
+                await query.answer("شما از بازی خروج کردید!", show_alert=True)
+                
+                players_list = "\n".join([f"• {p['name']}" for p in players.values()]) if players else "هیچ‌کس"
+                text = (
+                    "🎭 **اتاق بازی «من کی‌ام؟»**\n\n"
+                    f"👤 **اعضای حاضر ({len(players)} نفر):**\n{players_list}\n\n"
+                    "هر وقت همه‌ جمع شدید، دکمه «🚀 شروع بازی!» رو بزنید."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_whoami")],
+                    [InlineKeyboardButton("🚪 انصراف و خروج", callback_data="leave_whoami")],
+                    [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")],
+                    [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+                ]
+                await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            else:
+                await query.answer("شما هنوز در لیست بازیکنان نیستید!", show_alert=True)
 
     elif data == "start_whoami_game":
         if chat_id not in whoami_games:
@@ -413,7 +564,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for other_id, other_info in players.items():
                 if other_id != p_id:
                     pv_msg += f"• **{other_info['name']}** ⬅️ شخصیت: **{other_info['character']}**\n"
-            pv_msg += "\n⚠️ **یادت باشه شخصیت خودت رو نداری!** باید با سوال پرسیدن حدس بزنی کی هستی! 😉"
+            pv_msg += "\n⚠️ **یادت باشه شخصیت خودت رو نداری!** با سوال پرسیدن حدس بزن کی هستی! 😉"
 
             try:
                 await context.bot.send_message(chat_id=p_id, text=pv_msg, parse_mode="Markdown")
@@ -422,15 +573,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         start_text = (
             "🚀 **بازی «من کی‌ام؟» شروع شد!**\n\n"
-            "📥 لیست شخصیت‌های همه (به جز خودتون) به **پی‌وی (PV)** شما ارسال شد.\n\n"
-            "💡 **نحوه بازی:**\n"
-            "هر کس باید با پرسیدن سوالات بله/خیر یا راهنمایی از بقیه بپرسه **«من کی‌ام؟»**.\n"
+            "📥 لیست شخصیت‌های بقیه اعضا به **پی‌وی (PV)** شما ارسال شد.\n"
             "هر زمان تونستید شخصیت خودتون رو درست حدس بزنید، برنده می‌شید! 😎✨"
         )
         if failed_pv:
             start_text += f"\n\n⚠️ **توجه:** پی‌وی افراد زیر بسته بود: {', '.join(failed_pv)}"
 
-        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و رو کردن همه کارت‌ها", callback_data="reveal_whoami")]]
+        keyboard = [
+            [InlineKeyboardButton("🎭 رو کردن همه کارت‌ها", callback_data="reveal_whoami")],
+            [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+        ]
         await query.edit_message_text(text=start_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "reveal_whoami":
@@ -447,7 +599,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del whoami_games[chat_id]
         await query.edit_message_text(text=res, parse_mode="Markdown")
 
-    # --- ۵. بازی اسم بازی (زنجیره کلمات) ---
+    # --- ۶. بازی اسم بازی ---
     elif data == "start_name_game":
         first_letters = [
             "آ", "ب", "پ", "ت", "ج", "چ", "ح", "خ", "د", "ر", 
@@ -483,7 +635,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📌 **کلمه اول باید با حرف « {start_char} » شروع بشه.** سریع باشید! 👇"
         )
 
-        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+        keyboard = [[InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]]
         await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "finish_name_game":
@@ -507,17 +659,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         del name_games[chat_id]
         await query.edit_message_text(text=final_text, parse_mode="Markdown")
-
-    elif data == "back_to_games":
-        text = "🎮 **منوی بازی‌های کارا:** یکی از بازی‌های زیر رو انتخاب کن!"
-        keyboard = [
-            [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
-            [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
-            [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
-            [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
-            [InlineKeyboardButton("🔤 بازی اسم بازی (تایمر ۱۰ ثانیه)", callback_data="start_name_game")],
-        ]
-        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # 📢 گزارش اضافه شدن ربات به گروه جدید
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -622,7 +763,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "✨ **راهنمای استفاده از کارا:**\n\n"
-        "1️⃣ `/games` - منوی بازی‌ها (۲۰ سوالی، جاسوس، داستان گروهی، من کی‌ام؟، اسم بازی) 🎮\n"
+        "1️⃣ `/games` - منوی بازی‌ها (۲۰ سوالی، اطلاعات عمومی، جاسوس، داستان گروهی، من کی‌ام؟، اسم بازی) 🎮\n"
         "2️⃣ برای گپ زدن تو گروه، کافیه پیامم رو **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
         "3️⃣ `/summary` - خلاصه‌سازی چت‌های اخیر گروه 📊\n"
         "4️⃣ `/clear` - پاک کردن حافظه مکالمه 🧹"
@@ -737,7 +878,7 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             preamble="تو دستیاری به نام کارا هستی. خلاصه گروه را با لحنی بسیار روان، جذاب و صمیمی بنویس."
         )
         await update.message.reply_text(f"📊 **جمع‌بندی مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
-    except Exception as e:
+    except Exception:
         await update.message.reply_text("مشکل سیستمی در ارتباط")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -773,7 +914,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(group_recent_messages[chat_id]) > MAX_GROUP_MESSAGES:
             group_recent_messages[chat_id].pop(0)
 
-        # 🔤 مدیریت بازی «اسم بازی» (زنجیره کلمات)
+        # 🔤 مدیریت بازی «اسم بازی»
         if chat_id in name_games and name_games[chat_id]["active"]:
             game = name_games[chat_id]
             word = user_text.strip()
@@ -811,7 +952,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         name=f"timer_{chat_id}"
                     )
 
-                    keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+                    keyboard = [[InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]]
                     await update.message.reply_text(
                         f"✅ **آفرین {user_name}!** (+۱ امتیاز)\n\n"
                         f"👉 نفر بعدی کلمه‌ای بگه که با **« {last_char} »** شروع بشه!\n"
@@ -829,7 +970,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             else:
                 story_games[chat_id]["sentences"].append(user_text.strip())
-                keyboard = [[InlineKeyboardButton("🏁 پایان داستان و نمایش متن کامل", callback_data="finish_story")]]
+                keyboard = [
+                    [InlineKeyboardButton("📖 پایان داستان و نمایش متن کامل", callback_data="finish_story")],
+                    [InlineKeyboardButton("🏁 انصراف و لغو بازی", callback_data="cancel_game")]
+                ]
                 await update.message.reply_text(f"✅ کلمات {user_name} به داستان اضافه شد!\n\n👇 نفر بعدی ادامه بده:", reply_markup=InlineKeyboardMarkup(keyboard))
                 return
 
@@ -878,7 +1022,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 """
                 try:
                     res_20q = co.chat(message=prompt_20q, model="command-r-08-2024")
-                    await update.message.reply_text(f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}")
+                    keyboard = [[InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]]
+                    await update.message.reply_text(
+                        f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
                 except Exception:
                     await update.message.reply_text(f"سوالت بررسی شد! (فرصت‌های باقی‌مانده: {game['questions_left']})")
                 return
@@ -920,7 +1068,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """
             try:
                 res_20q = co.chat(message=prompt_20q, model="command-r-08-2024")
-                await update.message.reply_text(f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}")
+                keyboard = [[InlineKeyboardButton("🏁 انصراف و پایان بازی", callback_data="cancel_game")]]
+                await update.message.reply_text(
+                    f"{res_20q.text.strip()}\n\n⏱️ **فرصت‌های باقی‌مانده:** {game['questions_left']}",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
             except Exception:
                 await update.message.reply_text(f"پاسخ ثبت شد. (فرصت‌های باقی‌مانده: {game['questions_left']})")
             return
@@ -945,7 +1097,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(ai_reply)
 
-    except Exception as e:
+    except Exception:
         await update.message.reply_text("مشکل سیستمی در ارتباط")
 
 async def game_over_timeout(chat_id, secret, update):
