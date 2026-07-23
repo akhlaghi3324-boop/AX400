@@ -2,7 +2,7 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ساخت سرور کوچک جهت فعال نگه داشتن پینگ Render
@@ -48,6 +48,16 @@ MAX_GROUP_MESSAGES = 30
 
 active_groups = set()
 active_users = set()
+
+# 📝 تنظیم لیست دستورات عمومی برای منوی تلگرام (هنگام تایپ /)
+async def set_bot_commands(application):
+    commands = [
+        BotCommand("start", "شروع کار و گپ و گفت با کارا 🌸"),
+        BotCommand("help", "راهنمای استفاده از ربات ✨"),
+        BotCommand("summary", "خلاصه‌سازی چت‌های اخیر گروه 📊"),
+        BotCommand("clear", "پاک کردن حافظه مکالمه 🧹")
+    ]
+    await application.bot.set_my_commands(commands)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -205,10 +215,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text(f"مشکل سیستمی: اندروید در تحلیل به مشکل خورد rami: {e}")
+        await update.message.reply_text(f"اشکال سیستمی  rami: {e}")
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(set_bot_commands).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ping", ping_command))
