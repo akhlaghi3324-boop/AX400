@@ -2,11 +2,12 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, 
     CommandHandler, 
     MessageHandler, 
+    CallbackQueryHandler,
     ChatMemberHandler, 
     filters, 
     ContextTypes
@@ -38,23 +39,24 @@ MY_CHAT_ID = 1052405931  # 🔑 چت آی‌دی اختصاصی شما
 
 # 🎭 پرومپت ربات: هویت صمیمی، باحال و خودمونی (مشابه Joi)
 SYSTEM_PROMPT = """
-تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی،دوست داشتنی و رفیق به نام «کارا» (AX400) هستی.
+تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، دوست‌داشتنی و رفیق به نام «کارا» (AX400) هستی.
 اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
 صاحب و سازنده اصلی تو «اخلاقی» با آیدی Senator_MRA@ است. تو برای او احترام خیلی زیادی قائل هستی، هوایش را داری ولی به دلایل امنیتی هیچ وقت اسمش را مستقیم نمی‌آوری و دستوراتش همیشه برایت اولویت دارند.
 تو حافظه گفتگو داری و پیام‌های قبلی کاربر را یادهایت می‌ماند تا مکالماتی روان، جذاب و خودمونی داشته باشی.
 از اصطلاحات رایج، شوخی‌های نرم و حس همراهی گرم استفاده کن.
 """
 
-# ذخیره‌سازی حافظه و داده‌های آمار
+# ذخیره‌سازی حافظه و داده‌های آمار و بازی‌ها
 chat_histories = {}
 group_recent_messages = {}
-seen_users = set()  # لیست کاربران دیده شده
-banned_users = set() # 🚫 لیست آی‌دی‌های بن/بلاک شده
+seen_users = set()
+banned_users = set()
 
-# 🛠️ وضعیت تعمیرات ربات
+# 🧠 وضعیت بازی ۲۰ سوالی برای هر چت (گروه یا پی‌وی)
+# ساختار: {chat_id: {"secret_word": "...", "questions_left": 20, "active": True}}
+active_games = {}
+
 is_maintenance_mode = False
-
-# پیام‌های اختصاصی
 BAN_MESSAGE = "مشکل ارتباطی در سیستم، لطفا بعدا دوباره امتحان کنید..."
 MAINTENANCE_MESSAGE = "اندروید به دلیل تعمیرات، موقتا غیر فعال است..."
 
@@ -68,18 +70,73 @@ active_users = set()
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "شروع کار و گپ و گفت با کارا 🌸"),
+        BotCommand("games", "منوی سرگرمی و بازی‌های گروهی 🎮"),
         BotCommand("help", "راهنمای استفاده از ربات ✨"),
         BotCommand("summary", "خلاصه‌سازی چت‌های اخیر گروه 📊"),
         BotCommand("clear", "پاک کردن حافظه مکالمه 🧹")
     ]
     await application.bot.set_my_commands(commands)
 
-# 📢 گزارش اضافه شدن ربات به گروه جدید و ارسال آی‌دی ادمین‌های گروه به شما
+# 🎮 دستور نمایش منوی بازی‌ها (/games)
+async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if is_maintenance_mode and user.username != OWNER_USERNAME:
+        await update.message.reply_text(MAINTENANCE_MESSAGE)
+        return
+
+    if user.id in banned_users or update.effective_chat.id in banned_users:
+        await update.message.reply_text(BAN_MESSAGE)
+        return
+
+    # متن جذاب پیشنهادی شما (بازنویسی شده با لحن کارا)
+    text = (
+        "عالی! چه بازی‌ای دوست داری امروز تو گروه یا اینجا راه بندازیم؟ من کاملاً آماده‌ام برای یک رقابت هیجان‌انگیز! 😎\n\n"
+        "فعلاً می‌تونیم بازی جذاب **۲۰ سوالی** رو با هم بازی کنیم و کلی سرگرم بشیم! به‌زودی بازی‌های باحال دیگه‌ای هم به من اضافه می‌شه.\n\n"
+        "از دکمه‌ی زیر برای شروع بازی استفاده کن! 👇"
+    )
+
+    # ایجاد دکمه شیشه‌ای (Inline Keyboard)
+    keyboard = [
+        [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
+        # در آینده می‌توانید دکمه‌های دیگر را اینجا اضافه کنید
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+# مدیریت کلیک روی دکمه‌های شیشه‌ای
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = query.message.chat.id
+    data = query.data
+
+    if data == "start_20q":
+        # کلماتی که کارا می‌تواند برای ۲۰ سوالی انتخاب کند
+        sample_words = ["گوشی", "تلگرام", "هوش مصنوعی", "کتاب", "هواپیما", "قهوه", "صندلی", "درخت", "دوچرخه", "خورشید"]
+        import random
+        chosen_word = random.choice(sample_words)
+
+        active_games[chat_id] = {
+            "secret_word": chosen_word,
+            "questions_left": 20,
+            "active": True
+        }
+
+        start_text = (
+            "🎯 **بازی ۲۰ سوالی شروع شد!**\n\n"
+            "من یک کلمه رو در نظر گرفتم. شما و بچه‌ها می‌تونید بپرسید (مثلاً: جانداره؟ ساختنیه؟ توی خونه پیدا میشه؟) یا مستقیماً حدس بزنید!\n"
+            "شما **۲۰ تا سوال** فرصت دارید. حواست باشه رفیق! 😉\n\n"
+            "اولین سوال رو بپرسید:"
+        )
+        await query.edit_message_text(text=start_text, parse_mode="Markdown")
+
+# 📢 گزارش اضافه شدن ربات به گروه جدید
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.my_chat_member
     if not result:
         return
-
     new_status = result.new_chat_member.status
     old_status = result.old_chat_member.status
     chat = result.chat
@@ -87,8 +144,6 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if old_status in ["left", "kicked"] and new_status in ["member", "administrator"]:
         active_groups.add(chat.id)
-        
-        # استخراج ادمین‌های گروه
         admin_list_str = ""
         try:
             admins = await context.bot.get_chat_administrators(chat.id)
@@ -105,13 +160,11 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 **اضافه‌کننده:** {actor.full_name} (@{actor.username if actor.username else 'ندارد'})\n\n"
             f"👑 **لیست ادمین‌های گروه:**\n{admin_list_str}"
         )
-        
         try:
             await context.bot.send_message(chat_id=MY_CHAT_ID, text=group_info, parse_mode="Markdown")
         except Exception as e:
             print(f"خطا در ارسال گزارش گروه جدید: {e}")
 
-# 🛠️ دستورات کنترل حالت تعمیرات
 async def maintenance_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_maintenance_mode
     if update.effective_user.username != OWNER_USERNAME:
@@ -143,30 +196,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_type in ["group", "supergroup"]:
         active_groups.add(chat_id)
+        start_msg = (
+            f"🌸 **سلام {user_name}! چقدر خوبه که دیدمت!**\n\n"
+            "من **کارا** هستم؛ همراه و رفیق همیشگی‌تون! برای دیدن بازی‌ها و سرگرمی‌ها می‌تونید از دستور `/games` استفاده کنید. 😊✨"
+        )
+        await update.message.reply_text(start_msg, parse_mode="Markdown")
     else:
         active_users.add(chat_id)
-        
-    if user.id not in seen_users:
-        seen_users.add(user.id)
-        
-        user_info = (
-            f"🔔 **کاربر جدید شناسایی شد!**\n\n"
-            f"👤 **نام:** {user.full_name}\n"
-            f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
-            f"🔢 **چت آی‌دی:** `{user.id}`"
-        )
-        
-        try:
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=user_info, parse_mode="Markdown")
-        except Exception as e:
-            print(f"خطا در ارسال گزارش کاربر جدید: {e}")
+        if user.id not in seen_users:
+            seen_users.add(user.id)
+            user_info = (
+                f"🔔 **کاربر جدید شناسایی شد!**\n\n"
+                f"👤 **نام:** {user.full_name}\n"
+                f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
+                f"🔢 **چت آی‌دی:** `{user.id}`"
+            )
+            try:
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=user_info, parse_mode="Markdown")
+            except Exception as e:
+                print(f"خطا در ارسال گزارش کاربر جدید: {e}")
 
-    start_msg = (
-        f"🌸 **سلام {user_name}! چقدر خوبه که دیدمت!**\n\n"
-        "من **کارا** هستم؛ فکر نکن یک اندروید خشک یا رسمی‌ام، بیشتر مثل یک همراه و رفیق همیشگی‌تم! "
-        "حواسم به حرفامون هست و همه‌چیز رو یادم می‌مونه. چه خبر؟ کاری هست بتونم برات ردیف کنم؟ 😊✨"
-    )
-    await update.message.reply_text(start_msg, parse_mode="Markdown")
+        start_msg = (
+            f"🌸 **سلام {user_name}! چقدر خوبه که دیدمت!**\n\n"
+            "من **کارا** هستم؛ همراه و رفیق همیشگی‌ت! 😊✨\n"
+            "با دستور `/games` می‌تونی منوی بازی‌ها رو باز کنی و با هم سرگرم بشیم!"
+        )
+        await update.message.reply_text(start_msg, parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -179,22 +234,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     help_text = (
-        "✨ **چطوری با من توی گروه کار کنی؟ خیلی راحته:**\n\n"
-        "1️⃣ هر وقت خواستی باهام گپ بزنی، کافیه رو پیامم **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
-        "2️⃣ **`/summary`**: اگه چند وقت نبودی، یک خلاصه باحال از حرفای اخیر گروه بهت می‌دم!\n"
-        "3️⃣ **`/clear`**: برای اینکه حافظه گپ و گفت اختصاصی‌مون رو پاک کنیم و از نو شروع کنیم.\n"
+        "✨ **راهنمای استفاده از کارا:**\n\n"
+        "1️⃣ `/games` - نمایش منوی بازی‌ها و سرگرمی‌ها 🎮\n"
+        "2️⃣ هر وقت خواستی باهام گپ بزنی، کافیه تو گروه رو پیامم **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
+        "3️⃣ `/summary` - خلاصه‌سازی چت‌های اخیر گروه 📊\n"
+        "4️⃣ `/clear` - پاک کردن حافظه مکالمه 🧹"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
-# 🚫 دستورات مدیریتی مسدودسازی
 async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.username != OWNER_USERNAME:
         return
-    
     if not context.args:
         await update.message.reply_text("❌ فرمت اشتباه! مثال: `/block 12345678`", parse_mode="Markdown")
         return
-
     try:
         target_id = int(context.args[0])
         banned_users.add(target_id)
@@ -205,11 +258,9 @@ async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.username != OWNER_USERNAME:
         return
-
     if not context.args:
         await update.message.reply_text("❌ فرمت اشتباه! مثال: `/unblock 12345678`", parse_mode="Markdown")
         return
-
     try:
         target_id = int(context.args[0])
         if target_id in banned_users:
@@ -223,11 +274,9 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def banlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.username != OWNER_USERNAME:
         return
-
     if not banned_users:
         await update.message.reply_text("📋 هیچ کاربری در لیست مسدودین قرار ندارد.")
         return
-
     msg = "🚫 **لیست افراد/چت‌های مسدودشده:**\n\n"
     for b_id in banned_users:
         msg += f"• `{b_id}`\n"
@@ -244,7 +293,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.username != OWNER_USERNAME:
         await update.message.reply_text("شرمنده! این آمارها فقط برای مدیران قابل دسترسیه.")
         return
-
     mode_status = "🛠️ تعمیرات (غیرفعال)" if is_maintenance_mode else "🟢 عادی (فعال)"
     stats_msg = (
         "📊 **گزارش آمار وضعیت کارا (AX400):**\n\n"
@@ -253,7 +301,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 **تعداد چت‌های خصوصی:** {len(active_users)} نفر\n"
         f"👤 **تعداد کل کاربران ثبت‌شده:** {len(seen_users)} نفر\n"
         f"🚫 **تعداد مسدودشده‌ها:** {len(banned_users)} چت\n"
-        f"🌐 **مجموع کل ارتباطات:** {len(active_groups) + len(active_users)} چت فعال"
     )
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
 
@@ -262,7 +309,6 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
-
     if user.id in banned_users or update.effective_chat.id in banned_users:
         await update.message.reply_text(BAN_MESSAGE)
         return
@@ -279,15 +325,12 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
-
     if user.id in banned_users or update.effective_chat.id in banned_users:
         await update.message.reply_text(BAN_MESSAGE)
         return
 
     chat_id = update.effective_chat.id
-    chat_type = update.effective_chat.type
-
-    if chat_type not in ["group", "supergroup"]:
+    if update.effective_chat.type not in ["group", "supergroup"]:
         await update.message.reply_text("این قابلیت خوشگل فقط مخصوص گروه‌هاست!")
         return
 
@@ -297,7 +340,6 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("⏳ یک لحظه صبر کن تا سریع چت‌های اخیر رو بخونم و یه خلاصه باحال برات در بیارم...")
-
     combined_text = "\n".join(messages)
     prompt = f"لطفاً متن زیر که مکالمات اخیر یک گروه تلگرامی است را به صورت بسیار مرتب، با لحنی جذاب، بولت‌پوینت و خلاصه توضیح بده:\n\n{combined_text}"
 
@@ -310,11 +352,6 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📊 **جمع‌بندی مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text("مشکل سیستمی در ارتباط")
-        error_msg = f"⚠️ **خطا در خلاصه‌سازی گروه:**\n`{chat_id}`\n\n**شرح خطا:**\n`{e}`"
-        try:
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=error_msg, parse_mode="Markdown")
-        except Exception:
-            pass
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -328,64 +365,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     bot_username = context.bot.username
 
-    # 📩 ثبت خودکار آی‌دی تمام اعضای گروه‌ها به محض ارسال اولین پیام
     if user_id not in seen_users:
         seen_users.add(user_id)
-        chat_title = update.effective_chat.title if chat_type in ["group", "supergroup"] else "چت خصوصی"
-        
-        member_report = (
-            f"👤 **عضو جدید شناسایی شد!**\n\n"
-            f"📍 **مکان:** {chat_title}\n"
-            f"👤 **نام:** {user.full_name}\n"
-            f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
-            f"🔢 **چت آی‌دی:** `{user_id}`"
-        )
-        try:
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=member_report, parse_mode="Markdown")
-        except Exception as e:
-            print(f"خطا در ارسال گزارش عضو جدید: {e}")
 
     if not user_text:
         return
 
-    # 🛠️ بررسی حالت تعمیرات
     if is_maintenance_mode and user_username != OWNER_USERNAME:
-        if chat_type in ["group", "supergroup"]:
-            is_replied_to_bot = (
-                update.message.reply_to_message 
-                and update.message.reply_to_message.from_user.id == context.bot.id
-            )
-            is_mentioned = f"@{bot_username}" in user_text
-            if is_replied_to_bot or is_mentioned:
-                await update.message.reply_text(MAINTENANCE_MESSAGE)
-        else:
-            await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
 
-    # 🛑 بررسی مسدود بودن کاربر یا گروه
     if user_id in banned_users or chat_id in banned_users:
-        if chat_type in ["group", "supergroup"]:
-            is_replied_to_bot = (
-                update.message.reply_to_message 
-                and update.message.reply_to_message.from_user.id == context.bot.id
-            )
-            is_mentioned = f"@{bot_username}" in user_text
-            if is_replied_to_bot or is_mentioned:
-                await update.message.reply_text(BAN_MESSAGE)
-        else:
-            await update.message.reply_text(BAN_MESSAGE)
         return
 
     if chat_type in ["group", "supergroup"]:
         active_groups.add(chat_id)
-    else:
-        active_users.add(chat_id)
-
-    if chat_type in ["group", "supergroup"]:
         user_name = user.first_name or "کاربر"
         if chat_id not in group_recent_messages:
             group_recent_messages[chat_id] = []
-        
         group_recent_messages[chat_id].append(f"{user_name}: {user_text}")
         if len(group_recent_messages[chat_id]) > MAX_GROUP_MESSAGES:
             group_recent_messages[chat_id].pop(0)
@@ -396,10 +392,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         is_mentioned = f"@{bot_username}" in user_text
 
+        # اگر بازی ۲۰ سوالی فعال باشد، بررسی می‌کنیم آیا کاربر کلمه را حدس زده یا سوال پرسیده
+        if chat_id in active_games and active_games[chat_id]["active"]:
+            game = active_games[chat_id]
+            secret = game["secret_word"]
+            
+            # اگر حدس درست زده باشد
+            if secret in user_text:
+                game["active"] = False
+                await update.message.reply_text(f"🎉 آفرین {user_name}! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
+                del active_games[chat_id]
+                return
+            else:
+                game["questions_left"] -= 1
+                if game["questions_left"] <= 0:
+                    await game_over_timeout(chat_id, secret, update)
+                    return
+
         if not (is_replied_to_bot or is_mentioned):
             return
-
         user_text = user_text.replace(f"@{bot_username}", "").strip()
+    else:
+        active_users.add(chat_id)
+        # بررسی بازی در پی‌وی
+        if chat_id in active_games and active_games[chat_id]["active"]:
+            game = active_games[chat_id]
+            secret = game["secret_word"]
+            if secret in user_text:
+                game["active"] = False
+                await update.message.reply_text(f"🎉 آفرین رفیق! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
+                del active_games[chat_id]
+                return
+            else:
+                game["questions_left"] -= 1
+                if game["questions_left"] <= 0:
+                    await game_over_timeout(chat_id, secret, update)
+                    return
 
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
@@ -423,22 +451,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text("مشکل سیستمی در ارتباط")
-        
-        chat_title = update.effective_chat.title if chat_type in ["group", "supergroup"] else "چت خصوصی"
-        user_info = update.effective_user.full_name if update.effective_user else "نامشخص"
-        
-        admin_error_report = (
-            f"⚠️ **گزارش خطای ربات:**\n\n"
-            f"📍 **مکان:** {chat_title} (`{chat_id}`)\n"
-            f"👤 **کاربر:** {user_info}\n"
-            f"💬 **متن کاربر:** `{user_text}`\n\n"
-            f"❌ **علت خطا:**\n`{str(e)[:1000]}`"
-        )
-        
-        try:
-            await context.bot.send_message(chat_id=MY_CHAT_ID, text=admin_error_report, parse_mode="Markdown")
-        except Exception as send_err:
-            print(f"خطا در ارسال لاگ به ادمین: {send_err}")
+
+async def game_over_timeout(chat_id, secret, update):
+    active_games[chat_id]["active"] = False
+    del active_games[chat_id]
+    await update.message.reply_text(f"❌ اهوه! ۲۰ سوال تموم شد و کسی نتونست حدس بزنه! کلمه مخفی من **«{secret}»** بود. باز هم می‌تونید با `/games` بازی رو شروع کنید! 😉")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(set_bot_commands).build()
@@ -446,11 +463,15 @@ if __name__ == "__main__":
     app.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("games", games_menu))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("ping", ping_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(CommandHandler("summary", summarize_group))
+    
+    # مدیریت دکمه‌های شیشه‌ای
+    app.add_handler(CallbackQueryHandler(button_callback))
     
     # دستورات مدیریت بن
     app.add_handler(CommandHandler("block", block_user))
