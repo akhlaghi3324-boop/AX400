@@ -3,7 +3,14 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import cohere
 from telegram import Update, BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder, 
+    CommandHandler, 
+    MessageHandler, 
+    ChatMemberHandler, 
+    filters, 
+    ContextTypes
+)
 
 # ساخت سرور کوچک جهت فعال نگه داشتن پینگ Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -41,7 +48,7 @@ SYSTEM_PROMPT = """
 # ذخیره‌سازی حافظه و داده‌های آمار
 chat_histories = {}
 group_recent_messages = {}
-seen_users = set()  # لیست کاربران دیده شده برای جلوگیری از گزارش تکراری
+seen_users = set()  # لیست کاربران دیده شده
 
 MAX_HISTORY_LENGTH = 10
 MAX_GROUP_MESSAGES = 30
@@ -58,6 +65,32 @@ async def set_bot_commands(application):
         BotCommand("clear", "پاک کردن حافظه مکالمه 🧹")
     ]
     await application.bot.set_my_commands(commands)
+
+# 📢 گزارش اضافه شدن ربات به گروه جدید به پی‌وی شما
+async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    result = update.my_chat_member
+    if not result:
+        return
+
+    new_status = result.new_chat_member.status
+    old_status = result.old_chat_member.status
+    chat = result.chat
+    actor = result.from_user  # کسی که ربات را اضافه کرده
+
+    if old_status in ["left", "kicked"] and new_status in ["member", "administrator"]:
+        active_groups.add(chat.id)
+        
+        group_info = (
+            f"📢 **کارا به یک گروه جدید اضافه شد!**\n\n"
+            f"👥 **نام گروه:** {chat.title}\n"
+            f"🔢 **چت آی‌دی گروه:** `{chat.id}`\n"
+            f"👤 **اضافه‌کننده:** {actor.full_name} (@{actor.username if actor.username else 'ندارد'})"
+        )
+        
+        try:
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=group_info, parse_mode="Markdown")
+        except Exception as e:
+            print(f"خطا در ارسال گزارش گروه جدید: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -157,7 +190,13 @@ async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(f"📊 **جمع‌بندی مکالمات اخیر گروه:**\n\n{response.text}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"ای بابا، موقع خلاصه کردن یه مشکلی پیش اومد: {e}")
+        # اعلام پیام ساده به کاربر و گزارش خطا به ادمین
+        await update.message.reply_text("مشکل سیستمی در ارتباط")
+        error_msg = f"⚠️ **خطا در خلاصه‌سازی گروه:**\n`{chat_id}`\n\n**شرح خطا:**\n`{e}`"
+        try:
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=error_msg, parse_mode="Markdown")
+        except Exception:
+            pass
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -214,11 +253,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ai_reply)
 
     except Exception as e:
-        print(f"Error: {e}")
-        await update.message.reply_text(f"اشکال سیستمی  rami: {e}")
+        # ۱. پیام ساده و تمیز در گروه یا چت کاربر
+        await update.message.reply_text("مشکل سیستمی در ارتباط")
+        
+        # ۲. ارسال جزییات دقیق خطا مستقیم به پی‌وی شما
+        chat_title = update.effective_chat.title if chat_type in ["group", "supergroup"] else "چت خصوصی"
+        user_info = update.effective_user.full_name if update.effective_user else "نامشخص"
+        
+        admin_error_report = (
+            f"⚠️ **گزارش خطای ربات:**\n\n"
+            f"📍 **مکان:** {chat_title} (`{chat_id}`)\n"
+            f"👤 **کاربر:** {user_info}\n"
+            f"💬 **متن کاربر:** `{user_text}`\n\n"
+            f"❌ **علت خطا:**\n`{str(e)[:1000]}`"  # محدودیت طول متن برای جلوگیری از اسپم
+        )
+        
+        try:
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=admin_error_report, parse_mode="Markdown")
+        except Exception as send_err:
+            print(f"خطا در ارسال لاگ به ادمین: {send_err}")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(set_bot_commands).build()
+    
+    # هندر تعقیب وضعیت عضویت ربات در گروه‌ها
+    app.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
