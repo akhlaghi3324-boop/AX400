@@ -47,14 +47,49 @@ group_recent_messages = {}
 seen_users = set()
 banned_users = set()
 
-# 🧠 سیستم مدیریت بازی‌ها
+# 🧠 داده‌های بازی‌ها
 active_games_20q = {}
-
-# 🕵️‍♂️ داده‌های بازی جاسوس
-# ساختار: {chat_id: {"players": {user_id: user_name}, "spy_id": None, "location": "", "status": "joining"}}
 spy_games = {}
+active_quiz = {}
+story_games = {}
+whoami_games = {}
 
-# لیست مکان‌های متنوع برای بازی جاسوس
+# 🔤 داده‌های بازی «اسم بازی» (زنجیره کلمات)
+name_games = {}
+TIMER_SECONDS = 10  # زمان‌سنج ۱۰ ثانیه‌ای چالش
+
+FAMOUS_CHARACTERS = [
+    "شرلوک هولمز", "بتمن", "مسی", "انشتین", "هری پاتر", 
+    "ناپلئون", "مرد عنکبوتی", "کاپیتان اسپارو", "پیکاسو", "چارلی چاپلین",
+    "باب اسفنجی", "مرد آهنی", "کریستیانو رونالدو", "شکسپیر"
+]
+
+STORY_STARTERS = [
+    "در یک شب بارانی، سینا کلید کهنه‌ای پیدا کرد که...",
+    "سفینه فضایی درست وسط حیاط خانه ما فرود آمد و...",
+    "وقتی در یخچال رو باز کردم، یک اژدهای کوچک دیدم که...",
+    "استاد وارد کلاس شد ولی به جای تدریس، یک نقشه گنج رو کرد و گفت...",
+    "یک روز صبح بیدار شدم و دیدم هیچ‌کس توی شهر نیست جز..."
+]
+
+QUIZ_QUESTIONS = [
+    {
+        "q": "بلندترین قله جهان چه نام دارد؟",
+        "options": ["کی۲", "اورست", "دماوند", "کیلیمانجارو"],
+        "answer": 1
+    },
+    {
+        "q": "کدام سیاره به «سیاره سرخ» معروف است؟",
+        "options": ["زهره", "مشتری", "مریخ", "زحل"],
+        "answer": 2
+    },
+    {
+        "q": "پایتخت کشور استرالیا کدام شهر است؟",
+        "options": ["سیدنی", "ملبورن", "کانبرا", "پرت"],
+        "answer": 2
+    }
+]
+
 SPY_LOCATIONS = [
     "بیمارستان", "شهربازی", "رستوران", "فرودگاه", "مدرسه", 
     "سینما", "باشگاه ورزشی", "ایستگاه فضایی", "کشتی کروز", "موزه"
@@ -70,6 +105,42 @@ MAX_GROUP_MESSAGES = 30
 active_groups = set()
 active_users = set()
 
+# --- تابع مدیریت اتمام زمان (Timeout) بازی اسم بازی ---
+async def name_game_timeout(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.chat_id
+
+    if chat_id in name_games and name_games[chat_id]["active"]:
+        game = name_games[chat_id]
+
+        first_letters = [
+            "آ", "ب", "پ", "ت", "ج", "چ", "ح", "خ", "د", "ر", 
+            "ز", "س", "ش", "ص", "ط", "ع", "ف", "ق", "ک", "گ", 
+            "ل", "م", "ن", "و", "ه", "ی"
+        ]
+        new_char = random.choice(first_letters)
+        game["last_letter"] = new_char
+
+        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+        
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"⏰ **۱۰ ثانیه تمام شد! کسی کلمه‌ای نگفت.** 😅\n\n"
+                f"🔄 حرف عوض شد! کلمه بعدی باید با حرف **« {new_char} »** شروع بشه!\n"
+                f"⏱️ **فرصت باقی‌مانده:** {TIMER_SECONDS} ثانیه"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+        context.job_queue.run_once(
+            name_game_timeout,
+            TIMER_SECONDS,
+            chat_id=chat_id,
+            name=f"timer_{chat_id}"
+        )
+
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "شروع کار و گپ و گفت با کارا 🌸"),
@@ -80,7 +151,7 @@ async def set_bot_commands(application):
     ]
     await application.bot.set_my_commands(commands)
 
-# 🎮 منوی بازی‌ها
+# 🎮 منوی اصلی بازی‌ها
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_maintenance_mode and user.username != OWNER_USERNAME:
@@ -92,22 +163,30 @@ async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = (
-        "عالی! چه بازی‌ای دوست داری امروز راه بندازیم؟ من کاملاً آماده‌ام! 😎\n\n"
+        "عالی! چه بازی‌ای دوست داری امروز راه بندازیم؟ من کاملاً آماده‌ام برای یک رقابت هیجان‌انگیز! 😎\n\n"
         "🎮 **بازی‌های فعال:**\n"
-        "1️⃣ **۲۰ سوالی:** من یه کلمه انتخاب می‌کنم و شما حدس می‌زنید.\n"
-        "2️⃣ **جاسوس (Spy):** یک نفر جاسوس میشه و بقیه باید با سوال پرسیدن پیداش کنن!\n\n"
-        "یکی از بازی‌های زیر رو انتخاب کن: 👇"
+        "1️⃣ **۲۰ سوالی:** حدس کلمه مخفی من با سؤالات بله/خیر.\n"
+        "2️⃣ **جاسوس (Spy):** پیدا کردن جاسوس در بین اعضا!\n"
+        "3️⃣ **مسابقه اطلاعات عمومی (Quiz):** چالش اطلاعات عمومی چهارگزینه‌ای!\n"
+        "4️⃣ **داستان‌نویسی گروهی:** ساخت داستان گروهی (حداکثر ۱۰ کلمه برای هر نفر)!\n"
+        "5️⃣ **من کی‌ام؟:** حدس شخصیت مخفی اختصاص داده‌شده به شما!\n"
+        "6️⃣ **اسم بازی (زنجیره کلمات):** چالش سرعت عمل با تایمر ۱۰ ثانیه‌ای! ⏱️\n\n"
+        "یکی از گزینه‌های زیر رو انتخاب کن رفیق: 👇"
     )
 
     keyboard = [
         [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
         [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
+        [InlineKeyboardButton("💡 مسابقه اطلاعات عمومی (Quiz)", callback_data="start_quiz")],
+        [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
+        [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
+        [InlineKeyboardButton("🔤 بازی اسم بازی (تایمر ۱۰ ثانیه)", callback_data="start_name_game")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
-# 🔘 مدیریت دکمه‌های شیشه‌ای
+# 🔘 مدیریت کلیک روی دکمه‌های شیشه‌ای
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -116,7 +195,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
 
-    # --- بازی ۲۰ سوالی ---
+    # --- ۱. بازی ۲۰ سوالی ---
     if data == "start_20q":
         sample_words = ["گوشی", "تلگرام", "هوش مصنوعی", "کتاب", "هواپیما", "قهوه", "صندلی", "درخت", "دوچرخه", "خورشید"]
         chosen_word = random.choice(sample_words)
@@ -134,10 +213,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_text(text=start_text, parse_mode="Markdown")
 
-    # --- ثبت نام بازی جاسوس ---
+    # --- ۲. بازی جاسوس ---
     elif data == "init_spy":
         if query.message.chat.type not in ["group", "supergroup"]:
-            await query.edit_message_text("⚠️ **بازی جاسوس فقط مخصوص گروه‌هاست!** لطفا ربات رو به گروه اضافه کنید و اونجا بازی کنید. 🌸")
+            await query.edit_message_text("⚠️ **بازی جاسوس فقط مخصوص گروه‌هاست!** لطفا ربات رو به گروه اضافه کنید. 🌸")
             return
 
         spy_games[chat_id] = {
@@ -159,7 +238,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # --- ورود سایر اعضا به جاسوس ---
     elif data == "join_spy":
         if chat_id not in spy_games or spy_games[chat_id]["status"] != "joining":
             return
@@ -181,7 +259,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text=spy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # --- شروع نهایی بازی جاسوس ---
     elif data == "start_spy_game":
         if chat_id not in spy_games:
             return
@@ -198,7 +275,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         spy_user_id = random.choice(list(players.keys()))
         game["spy_id"] = spy_user_id
 
-        # ارسال مکان و نقش به پی‌وی بازیکنان
         failed_pv = []
         for p_id, p_name in players.items():
             try:
@@ -218,17 +294,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_msg = (
             "🚀 **بازی جاسوس شروع شد!**\n\n"
             "📥 نقش‌ها و مکان بازی به **پی‌وی (PV)** تمام بازیکنان ارسال شد.\n"
-            "شروع کنید به سوال پرسیدن از همدیگه تا جاسوس لو بره! 🕵️‍♀️✨\n\n"
-            "برای پایان بازی و لو دادن جاسوس از دکمه زیر استفاده کنید:"
+            "شروع کنید به سوال پرسیدن از همدیگه تا جاسوس لو بره! 🕵️‍♀️✨"
         )
-
         if failed_pv:
-            start_msg += f"\n\n⚠️ **توجه:** ربات نتونست به پی‌وی افراد زیر پیام بده (باید اول استارت زده باشن): {', '.join(failed_pv)}"
+            start_msg += f"\n\n⚠️ **توجه:** ربات نتونست به پی‌وی این افراد پیام بده (باید اول ربات رو استارت زده باشن): {', '.join(failed_pv)}"
 
         keyboard = [[InlineKeyboardButton("🔍 رو کردن کارت جاسوس!", callback_data="reveal_spy")]]
         await query.edit_message_text(text=start_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # --- رو کردن کارت جاسوس ---
     elif data == "reveal_spy":
         if chat_id not in spy_games:
             return
@@ -240,11 +313,259 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result_text = (
             "🏁 **پایان بازی جاسوس!**\n\n"
             f"🕵️‍♂️ **جاسوس این جوله:** {spy_name}\n"
-            f"📍 **مکان واقعی:** `{loc}`\n\n"
-            "امیدوارم کلی بهتون خوش گذشته باشه! برای بازی بعدی دوباره `/games` رو بزنید. 😉✨"
+            f"📍 **مکان واقعی:** `{loc}`"
         )
         del spy_games[chat_id]
         await query.edit_message_text(text=result_text, parse_mode="Markdown")
+
+    # --- ۳. بازی اطلاعات عمومی (Quiz) ---
+    elif data in ["start_quiz", "next_quiz"]:
+        q_data = random.choice(QUIZ_QUESTIONS)
+        active_quiz[chat_id] = q_data
+
+        question_text = f"💡 **سوال اطلاعات عمومی:**\n\n❓ {q_data['q']}"
+        
+        keyboard = []
+        for idx, option in enumerate(q_data["options"]):
+            keyboard.append([InlineKeyboardButton(f"{idx + 1}. {option}", callback_data=f"ans_quiz_{idx}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text=question_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    elif data.startswith("ans_quiz_"):
+        if chat_id not in active_quiz:
+            await query.answer("این سوال منقضی شده! از /games مجدد شروع کن.", show_alert=True)
+            return
+
+        selected_ans = int(data.split("_")[2])
+        q_data = active_quiz[chat_id]
+        correct_ans = q_data["answer"]
+        user_name = user.first_name or "دوست من"
+
+        if selected_ans == correct_ans:
+            res_text = f"🎉 **آفرین {user_name}!** پاسخ درست بود! 🏆\n\n❓ **سوال:** {q_data['q']}\n✅ **جواب:** {q_data['options'][correct_ans]}"
+        else:
+            res_text = f"❌ **ای بابا {user_name}!** پاسخ اشتباه بود.\n\n❓ **سوال:** {q_data['q']}\n✅ **پاسخ صحیح:** {q_data['options'][correct_ans]}"
+
+        del active_quiz[chat_id]
+
+        keyboard = [
+            [InlineKeyboardButton("➡️ سوال بعدی", callback_data="next_quiz")],
+            [InlineKeyboardButton("🎮 بازگشت به منوی بازی‌ها", callback_data="back_to_games")]
+        ]
+        await query.edit_message_text(text=res_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # --- ۴. بازی داستان گروهی ---
+    elif data == "start_story":
+        starter = random.choice(STORY_STARTERS)
+        story_games[chat_id] = {
+            "active": True,
+            "sentences": [f"🎬 {starter}"]
+        }
+
+        story_text = (
+            "📖 **بازی داستان‌نویسی گروهی شروع شد!**\n\n"
+            "📜 **قانون:** هر نفر حداکثر **۱۰ کلمه** بنویسه و داستان رو ادامه بده.\n\n"
+            f"📌 **شروع داستان:**\n\"{starter}\"\n\n"
+            "👇 نفر بعدی ادامه بده:"
+        )
+
+        keyboard = [[InlineKeyboardButton("🏁 پایان داستان و نمایش متن کامل", callback_data="finish_story")]]
+        await query.edit_message_text(text=story_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "finish_story":
+        if chat_id not in story_games or not story_games[chat_id]["active"]:
+            await query.answer("داستانی فعال نیست!", show_alert=True)
+            return
+
+        sentences = story_games[chat_id]["sentences"]
+        full_story = " ".join(sentences)
+
+        final_text = (
+            "📖 **داستان کامل گروهی شما:** 🏆\n\n"
+            f"{full_story}\n\n"
+            "دست همگی درد نکنه! 👏😍"
+        )
+        del story_games[chat_id]
+        await query.edit_message_text(text=final_text, parse_mode="Markdown")
+
+    # --- ۵. بازی من کی‌ام؟ ---
+    elif data == "init_whoami":
+        if query.message.chat.type not in ["group", "supergroup"]:
+            await query.edit_message_text("⚠️ **بازی «من کی‌ام؟» مخصوص گروه‌هاست!** ربات رو به گروه اضافه کن. 🌸")
+            return
+
+        whoami_games[chat_id] = {
+            "players": {user.id: {"name": user.first_name, "character": None}},
+            "status": "joining"
+        }
+
+        text = (
+            "🎭 **اتاق بازی «من کی‌ام؟» ساخته شد!**\n\n"
+            f"👤 **اعضای حاضر:**\n• {user.first_name}\n\n"
+            "حداقل **۲ نفر** لازمه! بقیه رو دکمه «📥 ورود به بازی» بزنن."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_whoami")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")]
+        ]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "join_whoami":
+        if chat_id not in whoami_games or whoami_games[chat_id]["status"] != "joining":
+            return
+
+        players = whoami_games[chat_id]["players"]
+        if user.id not in players:
+            players[user.id] = {"name": user.first_name, "character": None}
+
+        players_list = "\n".join([f"• {p['name']}" for p in players.values()])
+        text = (
+            "🎭 **اتاق بازی «من کی‌ام؟»**\n\n"
+            f"👤 **اعضای حاضر ({len(players)} نفر):**\n{players_list}\n\n"
+            "هر وقت همه‌ جمع شدید، دکمه «🚀 شروع بازی!» رو بزنید."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("📥 ورود به بازی", callback_data="join_whoami")],
+            [InlineKeyboardButton("🚀 شروع بازی!", callback_data="start_whoami_game")]
+        ]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "start_whoami_game":
+        if chat_id not in whoami_games:
+            return
+
+        game = whoami_games[chat_id]
+        players = game["players"]
+
+        if len(players) < 2:
+            await query.answer("برای بازی حداقل به ۲ نفر نیاز داریم! 😉", show_alert=True)
+            return
+
+        game["status"] = "playing"
+        available_chars = random.sample(FAMOUS_CHARACTERS, len(players))
+
+        idx = 0
+        for p_id in players:
+            players[p_id]["character"] = available_chars[idx]
+            idx += 1
+
+        failed_pv = []
+        for p_id, p_info in players.items():
+            pv_msg = "🎭 **شخصیت‌های بقیه اعضا در بازی «من کی‌ام؟»:**\n\n"
+            for other_id, other_info in players.items():
+                if other_id != p_id:
+                    pv_msg += f"• **{other_info['name']}** ⬅️ شخصیت: **{other_info['character']}**\n"
+            pv_msg += "\n⚠️ **یادت باشه شخصیت خودت رو نداری!** باید با سوال پرسیدن حدس بزنی کی هستی! 😉"
+
+            try:
+                await context.bot.send_message(chat_id=p_id, text=pv_msg, parse_mode="Markdown")
+            except Exception:
+                failed_pv.append(p_info["name"])
+
+        start_text = (
+            "🚀 **بازی «من کی‌ام؟» شروع شد!**\n\n"
+            "📥 لیست شخصیت‌های همه (به جز خودتون) به **پی‌وی (PV)** شما ارسال شد.\n\n"
+            "💡 **نحوه بازی:**\n"
+            "هر کس باید با پرسیدن سوالات بله/خیر یا راهنمایی از بقیه بپرسه **«من کی‌ام؟»**.\n"
+            "هر زمان تونستید شخصیت خودتون رو درست حدس بزنید، برنده می‌شید! 😎✨"
+        )
+        if failed_pv:
+            start_text += f"\n\n⚠️ **توجه:** پی‌وی افراد زیر بسته بود: {', '.join(failed_pv)}"
+
+        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و رو کردن همه کارت‌ها", callback_data="reveal_whoami")]]
+        await query.edit_message_text(text=start_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "reveal_whoami":
+        if chat_id not in whoami_games:
+            return
+
+        game = whoami_games[chat_id]
+        players = game["players"]
+
+        res = "🏁 **پایان بازی «من کی‌ام؟»**\n\n📜 **لیست کامل شخصیت‌ها:**\n\n"
+        for p_id, p_info in players.items():
+            res += f"• **{p_info['name']}** ⬅️ {p_info['character']}\n"
+
+        del whoami_games[chat_id]
+        await query.edit_message_text(text=res, parse_mode="Markdown")
+
+    # --- ۶. بازی اسم بازی (زنجیره کلمات) ---
+    elif data == "start_name_game":
+        first_letters = [
+            "آ", "ب", "پ", "ت", "ج", "چ", "ح", "خ", "د", "ر", 
+            "ز", "س", "ش", "ص", "ط", "ع", "ف", "ق", "ک", "گ", 
+            "ل", "م", "ن", "و", "ه", "ی"
+        ]
+        start_char = random.choice(first_letters)
+
+        name_games[chat_id] = {
+            "active": True,
+            "last_letter": start_char,
+            "used_words": set(),
+            "scores": {}
+        }
+
+        # حذف تایمر قبلی در صورت وجود
+        current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
+        for job in current_jobs:
+            job.schedule_removal()
+
+        # تنظیم تایمر ۱۰ ثانیه‌ای
+        context.job_queue.run_once(
+            name_game_timeout,
+            TIMER_SECONDS,
+            chat_id=chat_id,
+            name=f"timer_{chat_id}"
+        )
+
+        text = (
+            "🔤 **بازی «اسم بازی» (زنجیره کلمات) شروع شد!**\n\n"
+            "📜 **قواعد بازی:**\n"
+            "۱. کلمه‌ای بگو که با **حرف آخر** کلمه نفر قبلی شروع بشه.\n"
+            "۲. کلمات تکراری قبول نیستند!\n"
+            f"۳. برای هر کلمه فقط **{TIMER_SECONDS} ثانیه** فرصت داری!\n\n"
+            f"📌 **کلمه اول باید با حرف « {start_char} » شروع بشه.** سریع باشید! 👇"
+        )
+
+        keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "finish_name_game":
+        if chat_id not in name_games or not name_games[chat_id]["active"]:
+            await query.answer("بازی فعالی وجود ندارد!", show_alert=True)
+            return
+
+        current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
+        for job in current_jobs:
+            job.schedule_removal()
+
+        scores = name_games[chat_id]["scores"]
+
+        if not scores:
+            final_text = "🏁 **بازی اسم بازی به پایان رسید!**\n\nهیچ‌کس امتیازی کسب نکرد! 😅"
+        else:
+            final_text = "🏁 **جدول امتیازات پایانی بازی اسم بازی:** 🏆\n\n"
+            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            for rank, (name, score) in enumerate(sorted_scores, 1):
+                final_text += f"{rank}. **{name}**: {score} امتیاز\n"
+
+        del name_games[chat_id]
+        await query.edit_message_text(text=final_text, parse_mode="Markdown")
+
+    elif data == "back_to_games":
+        text = "🎮 **منوی بازی‌های کارا:** یکی از بازی‌های زیر رو انتخاب کن!"
+        keyboard = [
+            [InlineKeyboardButton("🧠 شروع بازی ۲۰ سوالی", callback_data="start_20q")],
+            [InlineKeyboardButton("🕵️‍♂️ شروع بازی جاسوس", callback_data="init_spy")],
+            [InlineKeyboardButton("💡 مسابقه اطلاعات عمومی (Quiz)", callback_data="start_quiz")],
+            [InlineKeyboardButton("📖 شروع داستان گروهی", callback_data="start_story")],
+            [InlineKeyboardButton("🎭 بازی من کی‌ام؟", callback_data="init_whoami")],
+            [InlineKeyboardButton("🔤 بازی اسم بازی (تایمر ۱۰ ثانیه)", callback_data="start_name_game")],
+        ]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # 📢 گزارش اضافه شدن ربات به گروه جدید
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,8 +670,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "✨ **راهنمای استفاده از کارا:**\n\n"
-        "1️⃣ `/games` - نمایش منوی بازی‌ها و سرگرمی‌ها (۲۰ سوالی، جاسوس) 🎮\n"
-        "2️⃣ هر وقت خواستی باهام گپ بزنی، کافیه تو گروه رو پیامم **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
+        "1️⃣ `/games` - منوی بازی‌ها (۲۰ سوالی، جاسوس، اطلاعات عمومی، داستان گروهی، من کی‌ام؟، اسم بازی) 🎮\n"
+        "2️⃣ برای گپ زدن تو گروه، کافیه پیامم رو **Reply** کنی یا آیدیم رو **Mention** کنی.\n"
         "3️⃣ `/summary` - خلاصه‌سازی چت‌های اخیر گروه 📊\n"
         "4️⃣ `/clear` - پاک کردن حافظه مکالمه 🧹"
     )
@@ -500,13 +821,83 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(group_recent_messages[chat_id]) > MAX_GROUP_MESSAGES:
             group_recent_messages[chat_id].pop(0)
 
+        # 🔤 مدیریت بازی «اسم بازی» (زنجیره کلمات)
+        if chat_id in name_games and name_games[chat_id]["active"]:
+            game = name_games[chat_id]
+            word = user_text.strip()
+
+            if len(word.split()) == 1 and not word.startswith("/"):
+                first_char = word[0]
+
+                if first_char == "ك": first_char = "ک"
+                if first_char == "ي": first_char = "ی"
+
+                if first_char == game["last_letter"]:
+                    if word in game["used_words"]:
+                        await update.message.reply_text(f"❌ **{user_name} عزیز!** کلمه «{word}» قبلاً استفاده شده!")
+                        return
+
+                    game["used_words"].add(word)
+
+                    last_char = word[-1]
+                    if last_char in ["ا", "آ"]: last_char = "ا"
+                    elif last_char in ["ە", "ه"]: last_char = "ه"
+                    elif last_char == "ي": last_char = "ی"
+                    elif last_char == "ك": last_char = "ک"
+
+                    game["last_letter"] = last_char
+                    game["scores"][user_name] = game["scores"].get(user_name, 0) + 1
+
+                    # ریست کردن تایمر ۱۰ ثانیه‌ای
+                    current_jobs = context.job_queue.get_jobs_by_name(f"timer_{chat_id}")
+                    for job in current_jobs:
+                        job.schedule_removal()
+
+                    context.job_queue.run_once(
+                        name_game_timeout,
+                        TIMER_SECONDS,
+                        chat_id=chat_id,
+                        name=f"timer_{chat_id}"
+                    )
+
+                    keyboard = [[InlineKeyboardButton("🏁 پایان بازی و جدول امتیازات", callback_data="finish_name_game")]]
+                    await update.message.reply_text(
+                        f"✅ **آفرین {user_name}!** (+۱ امتیاز)\n\n"
+                        f"👉 نفر بعدی کلمه‌ای بگه که با **« {last_char} »** شروع بشه!\n"
+                        f"⏱️ **فرصت باقی‌مانده:** {TIMER_SECONDS} ثانیه",
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode="Markdown"
+                    )
+                    return
+
+        # 📖 مدیریت بازی داستان گروهی
+        if chat_id in story_games and story_games[chat_id]["active"]:
+            words = user_text.strip().split()
+            if len(words) > 10:
+                await update.message.reply_text(f"⚠️ **{user_name} عزیز!** قانون بازی اینه که متنت **حداکثر ۱۰ کلمه** باشه (متن شما {len(words)} کلمه بود). لطفا کوتاه‌ترش کن! 😉")
+                return
+            else:
+                story_games[chat_id]["sentences"].append(user_text.strip())
+                keyboard = [[InlineKeyboardButton("🏁 پایان داستان و نمایش متن کامل", callback_data="finish_story")]]
+                await update.message.reply_text(f"✅ کلمات {user_name} به داستان اضافه شد!\n\n👇 نفر بعدی ادامه بده:", reply_markup=InlineKeyboardMarkup(keyboard))
+                return
+
+        # 🎭 بررسی حدس در بازی «من کی‌ام؟»
+        if chat_id in whoami_games and whoami_games[chat_id]["status"] == "playing":
+            game = whoami_games[chat_id]
+            if user_id in game["players"]:
+                my_char = game["players"][user_id]["character"]
+                if my_char and my_char in user_text:
+                    await update.message.reply_text(f"🎉 **آفرین {user_name}!** دقیقاً درست حدس زدی! 🏆\nشخصیت شما **«{my_char}»** بود!")
+                    return
+
         is_replied_to_bot = (
             update.message.reply_to_message 
             and update.message.reply_to_message.from_user.id == context.bot.id
         )
         is_mentioned = f"@{bot_username}" in user_text
 
-        # بررسی بازی ۲۰ سوالی
+        # بررسی ۲۰ سوالی
         if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
             game = active_games_20q[chat_id]
             secret = game["secret_word"]
@@ -527,19 +918,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     else:
         active_users.add(chat_id)
-        if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
-            game = active_games_20q[chat_id]
-            secret = game["secret_word"]
-            if secret in user_text:
-                game["active"] = False
-                await update.message.reply_text(f"🎉 آفرین رفیق! ایول، دقیقاً درست حدس زدی! کلمه مخفی من **«{secret}»** بود. 🏆✨")
-                del active_games_20q[chat_id]
-                return
-            else:
-                game["questions_left"] -= 1
-                if game["questions_left"] <= 0:
-                    await game_over_timeout(chat_id, secret, update)
-                    return
 
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
