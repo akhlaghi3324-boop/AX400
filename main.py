@@ -27,6 +27,7 @@ co = cohere.Client(api_key=COHERE_API_KEY)
 
 # مشخصات ادمین ارشد
 OWNER_USERNAME = "Senator_MRA"
+MY_CHAT_ID = 1052405931  # 🔑 چت آی‌دی اختصاصی شما
 
 # 🎭 پرومپت جدید: هویت صمیمی، باحال و خودمونی (مشابه Joi)
 SYSTEM_PROMPT = """
@@ -40,6 +41,8 @@ SYSTEM_PROMPT = """
 # ذخیره‌سازی حافظه و داده‌های آمار
 chat_histories = {}
 group_recent_messages = {}
+seen_users = set()  # لیست کاربران دیده شده برای جلوگیری از گزارش تکراری
+
 MAX_HISTORY_LENGTH = 10
 MAX_GROUP_MESSAGES = 30
 
@@ -47,15 +50,32 @@ active_groups = set()
 active_users = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     chat_type = update.effective_chat.type
     chat_id = update.effective_chat.id
-    user_name = update.effective_user.first_name or "رفیق"
+    user_name = user.first_name or "رفیق"
     
     if chat_type in ["group", "supergroup"]:
         active_groups.add(chat_id)
     else:
         active_users.add(chat_id)
         
+    # 📩 اطلاع‌رسانی استارت کاربر جدید مستقیم به پی‌وی شما
+    if user.id not in seen_users:
+        seen_users.add(user.id)
+        
+        user_info = (
+            f"🔔 **کاربر جدید ربات کارا را استارت کرد!**\n\n"
+            f"👤 **نام:** {user.full_name}\n"
+            f"🆔 **آیدی:** @{user.username if user.username else 'ندارد'}\n"
+            f"🔢 **چت آی‌دی:** `{user.id}`"
+        )
+        
+        try:
+            await context.bot.send_message(chat_id=MY_CHAT_ID, text=user_info, parse_mode="Markdown")
+        except Exception as e:
+            print(f"خطا در ارسال گزارش کاربر جدید: {e}")
+
     start_msg = (
         f"🌸 **سلام {user_name}! چقدر خوبه که دیدمت!**\n\n"
         "من **کارا** هستم؛ فکر نکن یک اندروید خشک یا رسمی‌ام، بیشتر مثل یک همراه و رفیق همیشگی‌تم! "
@@ -185,7 +205,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text(f"اخبار سیستم: یه مشکلی توی ارتباط پیش اومد rami: {e}")
+        await update.message.reply_text(f"مشکل سیستمی: اندروید در تحلیل به مشکل خورد rami: {e}")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
