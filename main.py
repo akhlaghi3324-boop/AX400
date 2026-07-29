@@ -36,6 +36,8 @@ co = cohere.Client(api_key=COHERE_API_KEY)
 
 OWNER_USERNAME = "Senator_MRA"
 MY_CHAT_ID = 1052405931
+CHANNEL_USERNAME = "@the_house_of_cards"
+CHANNEL_LINK = "https://t.me/the_house_of_cards"
 
 SYSTEM_PROMPT = """
 تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، دوست‌داشتنی و رفیق به نام «کارا» (AX400) هستی.
@@ -88,6 +90,37 @@ active_groups = set()
 active_users = set()
 
 # --- تابع ساخت سوال اطلاعات عمومی توسط هوش مصنوعی ---
+async def check_channel_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if user.username == OWNER_USERNAME:
+        return True
+
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+
+        if member.status in ["creator", "administrator", "member"]:
+            return True
+    except Exception:
+        pass
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join")]
+    ])
+
+    text = (
+        "🔒 برای استفاده از ربات ابتدا باید عضو کانال شوید.\n\n"
+        "بعد از عضویت روی دکمه «✅ بررسی عضویت» بزنید."
+    )
+
+    if update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(text, reply_markup=keyboard)
+
+    return False
+
 def generate_trivia_question():
     prompt = """
     یک سوال اطلاعات عمومی جالب و متنوع به زبان فارسی همراه با ۴ گزینه طراحی کن.
@@ -164,6 +197,8 @@ async def set_bot_commands(application):
 # 🎮 منوی اصلی بازی‌ها
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if not await check_channel_membership(update, context):
+    return
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -204,6 +239,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     user = query.from_user
     data = query.data
+    if data == "check_join":
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+
+        if member.status in ["creator", "administrator", "member"]:
+            await query.edit_message_text(
+                "✅ عضویت شما تأیید شد.\n\nحالا می‌توانید از ربات استفاده کنید. 🌸"
+            )
+        else:
+            raise Exception()
+
+    except Exception:
+        await query.answer("❌ هنوز عضو کانال نشده‌اید.", show_alert=True)
+
+    return
+
+if not await check_channel_membership(update, context):
+    return
 
     # --- دکمه لغو و پایان عمومی بازی‌ها ---
     if data == "cancel_game":
@@ -711,6 +764,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_type = update.effective_chat.type
     chat_id = update.effective_chat.id
+    if not await check_channel_membership(update, context):
+    return
 
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
@@ -885,7 +940,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
         return
-        
+    if update.effective_chat.type == "private":
+    if not await check_channel_membership(update, context):
+        return    
     user_id = user.id
     user_username = user.username
     chat_id = update.effective_chat.id
