@@ -198,7 +198,7 @@ async def set_bot_commands(application):
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not await check_channel_membership(update, context):
-    return
+        return
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -239,22 +239,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     user = query.from_user
     data = query.data
+    
     if data == "check_join":
-    try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+        try:
+            member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
 
-        if member.status in ["creator", "administrator", "member"]:
-            await query.edit_message_text(
-                "✅ عضویت شما تأیید شد.\n\nحالا می‌توانید از ربات استفاده کنید. 🌸"
-            )
-        else:
-            raise Exception()
- except Exception:
-        await query.answer("❌ هنوز عضو کانال نشده‌اید.",show_alert=True)
-    return
+            if member.status in ["creator", "administrator", "member"]:
+                await query.edit_message_text(
+                    "✅ عضویت شما تأیید شد.\n\nحالا می‌توانید از ربات استفاده کنید. 🌸"
+                )
+            else:
+                raise Exception()
+        except Exception:
+            await query.answer("❌ هنوز عضو کانال نشده‌اید.", show_alert=True)
+        return
 
-if not await check_channel_membership(update, context):
-    return
+    if not await check_channel_membership(update, context):
+        return
 
     
     # --- دکمه لغو و پایان عمومی بازی‌ها ---
