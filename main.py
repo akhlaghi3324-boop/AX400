@@ -52,8 +52,6 @@ chat_histories = {}
 group_recent_messages = {}
 seen_users = set()
 banned_users = set()
-# کش برای ذخیره وضعیت عضویت کاربران (برای کاهش درخواست به تلگرام)
-membership_cache = {}
 
 # 🧠 داده‌های بازی‌ها
 active_games_20q = {}
@@ -94,44 +92,38 @@ MAX_GROUP_MESSAGES = 30
 active_groups = set()
 active_users = set()
 
-# ========== تابع بررسی عضویت در کانال ==========
+# ========== تابع بررسی عضویت در کانال (بدون کش) ==========
 async def check_channel_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بررسی می‌کند که کاربر عضو کانال است یا خیر"""
+    """بررسی می‌کند که کاربر عضو کانال است یا خیر - بدون کش برای تشخیص لحظه‌ای خروج"""
     user = update.effective_user
     
     # اگر کاربر مالک ربات باشد، نیازی به عضویت ندارد
     if user.username == OWNER_USERNAME:
         return True
     
-    # بررسی کش (برای کاهش درخواست‌های اضافی)
-    if user.id in membership_cache:
-        return membership_cache[user.id]
-    
     try:
         member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
         
         if member.status in ["creator", "administrator", "member"]:
-            membership_cache[user.id] = True
             return True
         else:
-            membership_cache[user.id] = False
             return False
     except Exception:
         # اگر کاربر عضو نباشد یا خطایی رخ دهد
-        membership_cache[user.id] = False
         return False
 
 async def send_join_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ارسال پیام درخواست عضویت در کانال"""
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join")]
+        [InlineKeyboardButton("✅ بررسی مجدد عضویت", callback_data="check_join")]
     ])
     
     text = (
-        "🔒 **برای استفاده از ربات ابتدا باید عضو کانال شوید.**\n\n"
-        "📌 روی دکمه زیر کلیک کنید و عضو کانال ما شوید، سپس دکمه «✅ بررسی عضویت» را بزنید.\n\n"
-        "✨ پس از تأیید عضویت، به ربات خوش‌آمدید!"
+        "🔒 **برای استفاده از ربات باید عضو کانال باشید!**\n\n"
+        "❌ شما از کانال خارج شده‌اید یا هرگز عضو نشده‌اید.\n\n"
+        "📌 لطفاً روی دکمه زیر کلیک کنید و عضو کانال ما شوید، سپس «✅ بررسی مجدد عضویت» را بزنید.\n\n"
+        "✨ پس از تأیید عضویت، دوباره به ربات خوش‌آمدید!"
     )
     
     if update.callback_query:
@@ -267,10 +259,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ====== دکمه بررسی مجدد عضویت ======
     if data == "check_join":
-        # پاک کردن کش برای بررسی مجدد
-        if user.id in membership_cache:
-            del membership_cache[user.id]
-        
         if await check_channel_membership(update, context):
             await query.edit_message_text(
                 "✅ **عضویت شما تأیید شد!**\n\n"
@@ -1004,7 +992,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in banned_users or chat_id in banned_users:
         return
 
+    # ===== بررسی عضویت در کانال برای همه کاربران (حتی در گروه) =====
+    # اگر کاربر در گروه است و عضو کانال نیست، پیامش رو نادیده بگیر (فقط اگه ربات رو منشن کرده یا ریپلای کرده)
     if chat_type in ["group", "supergroup"]:
+        # ببینیم آیا کاربر ربات رو منشن کرده یا ریپلای کرده
+        is_replied_to_bot = (
+            update.message.reply_to_message 
+            and update.message.reply_to_message.from_user.id == context.bot.id
+        )
+        is_mentioned = f"@{bot_username}" in user_text
+        
+        # اگه کاربر ربات رو صدا زده، بررسی عضویت کن
+        if is_replied_to_bot or is_mentioned:
+            if not await check_channel_membership(update, context):
+                await send_join_channel_message(update, context)
+                return
+        
         active_groups.add(chat_id)
         user_name = user.first_name or "کاربر"
         if chat_id not in group_recent_messages:
@@ -1085,12 +1088,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(f"🎉 **آفرین {user_name}!** دقیقاً درست حدس زدی! 🏆\nشخصیت شما **«{my_char}»** بود!")
                     return
 
-        is_replied_to_bot = (
-            update.message.reply_to_message 
-            and update.message.reply_to_message.from_user.id == context.bot.id
-        )
-        is_mentioned = f"@{bot_username}" in user_text
-
         # 🎯 بررسی و پاسخ هوشمند به بازی ۲۰ سوالی در گروه‌ها
         if chat_id in active_games_20q and active_games_20q[chat_id]["active"]:
             game = active_games_20q[chat_id]
@@ -1134,7 +1131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     else:
-        # ===== چت خصوصی (PV) - بررسی عضویت =====
+        # ===== چت خصوصی (PV) - بررسی عضویت برای هر پیام =====
         if not await check_channel_membership(update, context):
             await send_join_channel_message(update, context)
             return
