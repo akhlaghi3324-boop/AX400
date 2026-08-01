@@ -37,6 +37,11 @@ co = cohere.Client(api_key=COHERE_API_KEY)
 OWNER_USERNAME = "Senator_MRA"
 MY_CHAT_ID = 1052405931
 
+# ========== تنظیمات کانال ==========
+CHANNEL_USERNAME = "@the_house_of_cards"  # نام کاربری کانال رو اینجا بذار
+CHANNEL_LINK = "https://t.me/the_house_of_cards"  # لینک کانال
+# ===================================
+
 SYSTEM_PROMPT = """
 تو یک اندروید هوشمند و فوق‌العاده باحال، صمیمی، دوست‌داشتنی و رفیق به نام «کارا» (AX400) هستی.
 اصلاً لحن خشک، رسمی یا رباتیک نداری و دقیقاً مثل یک رفیق شش‌دانگ، گرم، همدل و با انرژی با کاربر صحبت می‌کنی.
@@ -47,6 +52,8 @@ chat_histories = {}
 group_recent_messages = {}
 seen_users = set()
 banned_users = set()
+# کش برای ذخیره وضعیت عضویت کاربران (برای کاهش درخواست به تلگرام)
+membership_cache = {}
 
 # 🧠 داده‌های بازی‌ها
 active_games_20q = {}
@@ -86,6 +93,53 @@ MAX_GROUP_MESSAGES = 30
 
 active_groups = set()
 active_users = set()
+
+# ========== تابع بررسی عضویت در کانال ==========
+async def check_channel_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بررسی می‌کند که کاربر عضو کانال است یا خیر"""
+    user = update.effective_user
+    
+    # اگر کاربر مالک ربات باشد، نیازی به عضویت ندارد
+    if user.username == OWNER_USERNAME:
+        return True
+    
+    # بررسی کش (برای کاهش درخواست‌های اضافی)
+    if user.id in membership_cache:
+        return membership_cache[user.id]
+    
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_USERNAME, user.id)
+        
+        if member.status in ["creator", "administrator", "member"]:
+            membership_cache[user.id] = True
+            return True
+        else:
+            membership_cache[user.id] = False
+            return False
+    except Exception:
+        # اگر کاربر عضو نباشد یا خطایی رخ دهد
+        membership_cache[user.id] = False
+        return False
+
+async def send_join_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ارسال پیام درخواست عضویت در کانال"""
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_join")]
+    ])
+    
+    text = (
+        "🔒 **برای استفاده از ربات ابتدا باید عضو کانال شوید.**\n\n"
+        "📌 روی دکمه زیر کلیک کنید و عضو کانال ما شوید، سپس دکمه «✅ بررسی عضویت» را بزنید.\n\n"
+        "✨ پس از تأیید عضویت، به ربات خوش‌آمدید!"
+    )
+    
+    if update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+# ===============================================
 
 # --- تابع ساخت سوال اطلاعات عمومی توسط هوش مصنوعی ---
 def generate_trivia_question():
@@ -164,6 +218,12 @@ async def set_bot_commands(application):
 # 🎮 منوی اصلی بازی‌ها
 async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # بررسی عضویت در کانال
+    if not await check_channel_membership(update, context):
+        await send_join_channel_message(update, context)
+        return
+    
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -204,6 +264,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     user = query.from_user
     data = query.data
+    
+    # ====== دکمه بررسی مجدد عضویت ======
+    if data == "check_join":
+        # پاک کردن کش برای بررسی مجدد
+        if user.id in membership_cache:
+            del membership_cache[user.id]
+        
+        if await check_channel_membership(update, context):
+            await query.edit_message_text(
+                "✅ **عضویت شما تأیید شد!**\n\n"
+                "🌸 به ربات کارا خوش‌آمدید!\n"
+                "حالا می‌توانید از دستور `/games` برای بازی‌ها استفاده کنید."
+            )
+        else:
+            await query.answer("❌ هنوز عضو کانال نشده‌اید. لطفاً ابتدا عضو شوید.", show_alert=True)
+        return
 
     # --- دکمه لغو و پایان عمومی بازی‌ها ---
     if data == "cancel_game":
@@ -711,6 +787,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_type = update.effective_chat.type
     chat_id = update.effective_chat.id
+    
+    # بررسی عضویت در کانال
+    if not await check_channel_membership(update, context):
+        await send_join_channel_message(update, context)
+        return
 
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
@@ -753,6 +834,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # بررسی عضویت در کانال
+    if not await check_channel_membership(update, context):
+        await send_join_channel_message(update, context)
+        return
+    
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -834,6 +921,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # بررسی عضویت در کانال
+    if not await check_channel_membership(update, context):
+        await send_join_channel_message(update, context)
+        return
+    
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -850,6 +943,12 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def summarize_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # بررسی عضویت در کانال
+    if not await check_channel_membership(update, context):
+        await send_join_channel_message(update, context)
+        return
+    
     if is_maintenance_mode and user.username != OWNER_USERNAME:
         await update.message.reply_text(MAINTENANCE_MESSAGE)
         return
@@ -1035,6 +1134,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     else:
+        # ===== چت خصوصی (PV) - بررسی عضویت =====
+        if not await check_channel_membership(update, context):
+            await send_join_channel_message(update, context)
+            return
+        
         active_users.add(chat_id)
 
     # 🎯 بررسی و پاسخ هوشمند به بازی ۲۰ سوالی در چت خصوصی (PV)
