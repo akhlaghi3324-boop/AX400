@@ -252,8 +252,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         await query.answer(
-            "❌ هنوز عضو کانال نشده‌اید.",
-            show_alert=True
+    "❌ هنوز عضو کانال نشده‌اید.",
+    show_alert=True
         )
 
     return
