@@ -248,8 +248,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ عضویت شما تأیید شد.\n\nحالا می‌توانید از ربات استفاده کنید. 🌸"
             )
         else:
-            raise Exception()
-
+            
    
 
 if not await check_channel_membership(update, context):
