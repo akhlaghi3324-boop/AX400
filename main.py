@@ -256,6 +256,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if not await check_channel_membership(update, context):
     return
 
+    
     # --- دکمه لغو و پایان عمومی بازی‌ها ---
     if data == "cancel_game":
         active_games_20q.pop(chat_id, None)
